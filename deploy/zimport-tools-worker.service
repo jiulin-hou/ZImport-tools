@@ -1,0 +1,12 @@
+[Unit]
+Description=Zimbra Import Worker
+After=network.target
+
+[Service]
+User=zimport-tools
+WorkingDirectory=/opt/zimport-tools
+ExecStart=/opt/zimport-tools/venv/bin/python -m zimport_tools.worker /etc/zimport-tools/config.ini
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

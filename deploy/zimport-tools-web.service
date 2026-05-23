@@ -1,0 +1,13 @@
+[Unit]
+Description=Zimbra Import Web
+After=network.target
+
+[Service]
+User=zimport-tools
+WorkingDirectory=/opt/zimport-tools
+Environment=PYTHONPATH=/opt/zimport-tools
+ExecStart=/opt/zimport-tools/venv/bin/python deploy/run_web.py /etc/zimport-tools/config.ini
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
