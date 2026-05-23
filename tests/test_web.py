@@ -1,3 +1,5 @@
+import io
+
 import pytest
 from zimport_tools import web, zimbra_session
 from zimport_tools.zimbra_auth import Identity, AuthError
@@ -125,3 +127,222 @@ def test_csrf_valid_request_passes(app, patch_validate):
                        headers={"X-Zimport-CSRF": "1",
                                 "Origin": "https://h:8443"})
     assert resp.status_code == 200
+
+
+# ---- helpers for business endpoint tests ----
+
+def _csrf():
+    return {"X-Zimport-CSRF": "1"}
+
+
+def _logged_in(app, patch_validate, account="u@d", is_admin=False, token="TOK"):
+    patch_validate({token: Identity(is_admin, account)})
+    client = app.test_client()
+    client.set_cookie("ZM_AUTH_TOKEN", token)
+    return client
+
+
+# ---- /api/tasks ----
+
+def test_tasks_requires_login(app):
+    assert app.test_client().get("/api/tasks").status_code == 401
+
+
+# ---- /api/folders ----
+
+def test_folders_returns_paths(app, patch_validate, monkeypatch):
+    monkeypatch.setattr(web.zimbra_auth, "delegate_token",
+                        lambda cfg, acc: "DTOK")
+    monkeypatch.setattr(web.zimbra_folders, "list_folders",
+                        lambda cfg, tok: ["Inbox", "Sent"])
+    client = _logged_in(app, patch_validate)
+    resp = client.get("/api/folders")
+    assert resp.status_code == 200
+    assert resp.get_json()["folders"] == ["Inbox", "Sent"]
+
+
+def test_folders_forbidden_for_non_admin_other_account(app, patch_validate):
+    client = _logged_in(app, patch_validate)
+    resp = client.get("/api/folders?account=other@d")
+    assert resp.status_code == 403
+
+
+# ---- /api/admin/accounts/search ----
+
+def test_admin_account_search_requires_admin(app, patch_validate):
+    client = _logged_in(app, patch_validate)  # non-admin
+    resp = client.get("/api/admin/accounts/search?q=al")
+    assert resp.status_code == 403
+
+
+def test_admin_account_search_returns_results(app, patch_validate, monkeypatch):
+    monkeypatch.setattr(web.zimbra_search, "search_accounts",
+                        lambda cfg, q: [{"name": "a@d", "display": "A"}])
+    client = _logged_in(app, patch_validate, account="admin@d", is_admin=True)
+    resp = client.get("/api/admin/accounts/search?q=ali")
+    assert resp.status_code == 200
+    assert resp.get_json()["accounts"][0]["name"] == "a@d"
+
+
+# ---- /api/tasks/<id>/retry ----
+
+def test_retry_creates_new_task_for_failed(app, patch_validate, tmp_path):
+    from zimport_tools.store import TaskStore
+    db_path = str(tmp_path / "t.db")
+    store = TaskStore(db_path)
+    temp_dir = tmp_path / "td"
+    temp_dir.mkdir()
+    old_id = store.create_task(account="u@d", requester="u@d",
+                                target_folder="Inbox",
+                                temp_dir=str(temp_dir))
+    store.set_status(old_id, "failed", error="boom")
+    client = _logged_in(app, patch_validate)
+    resp = client.post("/api/tasks/" + old_id + "/retry", headers=_csrf())
+    assert resp.status_code == 200, resp.get_json()
+    new_id = resp.get_json()["task_id"]
+    assert new_id != old_id
+    new = store.get_task(new_id)
+    assert new["status"] == "queued"
+    assert new["temp_dir"] == str(temp_dir)
+    assert new["target_folder"] == "Inbox"
+
+
+def test_retry_410_when_temp_dir_gone(app, patch_validate, tmp_path):
+    from zimport_tools.store import TaskStore
+    store = TaskStore(str(tmp_path / "t.db"))
+    old_id = store.create_task(account="u@d", requester="u@d",
+                                target_folder="Inbox",
+                                temp_dir=str(tmp_path / "gone"))
+    store.set_status(old_id, "failed", error="boom")
+    client = _logged_in(app, patch_validate)
+    assert client.post("/api/tasks/" + old_id + "/retry",
+                       headers=_csrf()).status_code == 410
+
+
+def test_retry_403_for_other_user(app, patch_validate, tmp_path):
+    from zimport_tools.store import TaskStore
+    store = TaskStore(str(tmp_path / "t.db"))
+    td = tmp_path / "td"
+    td.mkdir()
+    old_id = store.create_task(account="other@d", requester="other@d",
+                                target_folder="Inbox", temp_dir=str(td))
+    store.set_status(old_id, "failed")
+    client = _logged_in(app, patch_validate)  # logs in as u@d
+    assert client.post("/api/tasks/" + old_id + "/retry",
+                       headers=_csrf()).status_code == 403
+
+
+def test_retry_404_when_missing(app, patch_validate):
+    client = _logged_in(app, patch_validate)
+    assert client.post("/api/tasks/nosuch/retry",
+                       headers=_csrf()).status_code == 404
+
+
+def test_retry_400_when_status_not_failed(app, patch_validate, tmp_path,
+                                          monkeypatch):
+    """status=queued/done/running 都不应该让重试。"""
+    client = _logged_in(app, patch_validate)
+    monkeypatch.setattr(web.uploads, "input_dir",
+                        lambda root, uid: str(tmp_path))
+    monkeypatch.setattr(web.uploads, "upload_dir",
+                        lambda root, uid: str(tmp_path))
+    monkeypatch.setattr(web.uploads, "merge_file", lambda *a, **kw: None)
+    monkeypatch.setattr(web.os, "listdir", lambda p: [])
+    init = client.post("/api/upload/init", headers=_csrf()).get_json()
+    r = client.post("/api/import", headers=_csrf(), json={
+        "upload_id": init["upload_id"], "files": [], "folder": "Inbox"})
+    task_id = r.get_json()["task_id"]
+    resp = client.post("/api/tasks/" + task_id + "/retry", headers=_csrf())
+    assert resp.status_code == 400
+
+
+# ---- /api/upload/* + /api/import ----
+
+def test_upload_init_and_chunk_flow(app, patch_validate):
+    client = _logged_in(app, patch_validate)
+    init = client.post("/api/upload/init", headers=_csrf())
+    assert init.status_code == 200
+    upload_id = init.get_json()["upload_id"]
+    resp = client.post("/api/upload/chunk", headers=_csrf(), data={
+        "upload_id": upload_id, "file_index": "0", "chunk_index": "0",
+        "blob": (io.BytesIO(b"HELLO"), "blob"),
+    }, content_type="multipart/form-data")
+    assert resp.status_code == 200
+    status = client.get("/api/upload/status",
+                        query_string={"upload_id": upload_id,
+                                      "file_index": "0",
+                                      "total_chunks": "2"})
+    assert status.get_json()["missing"] == [1]
+
+
+def test_upload_chunk_requires_login(app):
+    """No cookie -> 401 BEFORE CSRF is even checked."""
+    client = app.test_client()
+    resp = client.post("/api/upload/chunk",
+                       headers=_csrf(),
+                       data={"upload_id": "x"})
+    assert resp.status_code == 401
+
+
+def test_upload_chunk_rejects_bad_upload_id(app, patch_validate):
+    client = _logged_in(app, patch_validate)
+    resp = client.post("/api/upload/chunk", headers=_csrf(), data={
+        "upload_id": "../../etc", "file_index": "0", "chunk_index": "0",
+        "blob": (io.BytesIO(b"x"), "blob"),
+    }, content_type="multipart/form-data")
+    assert resp.status_code == 400
+
+
+def test_import_merges_and_enqueues(app, patch_validate):
+    client = _logged_in(app, patch_validate)
+    upload_id = client.post("/api/upload/init",
+                            headers=_csrf()).get_json()["upload_id"]
+    client.post("/api/upload/chunk", headers=_csrf(), data={
+        "upload_id": upload_id, "file_index": "0", "chunk_index": "0",
+        "blob": (io.BytesIO(b"From: a@b\r\n\r\nhi"), "blob"),
+    }, content_type="multipart/form-data")
+    resp = client.post("/api/import", headers=_csrf(), json={
+        "upload_id": upload_id,
+        "files": [{"index": 0, "name": "msg.eml", "chunks": 1}],
+        "folder": "Inbox",
+    })
+    assert resp.status_code == 200
+    task_id = resp.get_json()["task_id"]
+    task = client.get("/api/tasks/" + task_id).get_json()
+    assert task["status"] == "queued"
+    assert task["account"] == "u@d"
+
+
+def test_normal_user_cannot_target_other_account(app, patch_validate):
+    client = _logged_in(app, patch_validate)
+    upload_id = client.post("/api/upload/init",
+                            headers=_csrf()).get_json()["upload_id"]
+    client.post("/api/upload/chunk", headers=_csrf(), data={
+        "upload_id": upload_id, "file_index": "0", "chunk_index": "0",
+        "blob": (io.BytesIO(b"x"), "blob"),
+    }, content_type="multipart/form-data")
+    resp = client.post("/api/import", headers=_csrf(), json={
+        "upload_id": upload_id,
+        "files": [{"index": 0, "name": "m.eml", "chunks": 1}],
+        "folder": "Inbox",
+        "account": "victim@d",  # non-admin attempts to target someone else
+    })
+    task_id = resp.get_json()["task_id"]
+    assert client.get("/api/tasks/" + task_id).get_json()["account"] == "u@d"
+
+
+def test_import_rejected_when_queue_full(app, patch_validate, monkeypatch):
+    client = _logged_in(app, patch_validate)
+    monkeypatch.setattr(web, "_queue_limit_for", lambda store, cfg: 0)
+    upload_id = client.post("/api/upload/init",
+                            headers=_csrf()).get_json()["upload_id"]
+    client.post("/api/upload/chunk", headers=_csrf(), data={
+        "upload_id": upload_id, "file_index": "0", "chunk_index": "0",
+        "blob": (io.BytesIO(b"x"), "blob"),
+    }, content_type="multipart/form-data")
+    resp = client.post("/api/import", headers=_csrf(), json={
+        "upload_id": upload_id,
+        "files": [{"index": 0, "name": "m.eml", "chunks": 1}],
+        "folder": "Inbox",
+    })
+    assert resp.status_code == 429
