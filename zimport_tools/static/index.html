@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ZImport-tools — 数据导入</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="loading" class="card">正在识别身份…</div>
+
+  <div id="error" class="card hidden">
+    <h2>无法使用</h2>
+    <p id="errorMsg" class="err"></p>
+    <button id="retryBtn">重试</button>
+  </div>
+
+  <div id="main" class="card hidden">
+    <p>当前登录:<b id="who"></b></p>
+    <div id="adminBox" class="hidden">
+      <label>目标账户(管理员):<input id="targetAccount"
+        placeholder="留空=导入到自己"></label>
+    </div>
+    <label>目标文件夹:<select id="folder"></select></label>
+    <label>选择文件(多个 .eml 或一个 .tgz):
+      <input id="files" type="file" multiple accept=".eml,.tgz,.tar.gz">
+    </label>
+    <button id="startBtn">开始导入</button>
+    <div id="uploadProgress"></div>
+
+    <h3>我的任务</h3>
+    <button id="refreshBtn">刷新</button>
+    <table id="tasks"><thead><tr>
+      <th>任务</th><th>账户</th><th>状态</th><th>进度</th><th>失败</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
