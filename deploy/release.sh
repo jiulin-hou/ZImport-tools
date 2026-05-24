@@ -82,10 +82,10 @@ git push origin "$TAG"
 
 # --- 交付包 -------------------------------------------------------------
 mkdir -p dist
-ARCHIVE="dist/zimport-${VERSION}.tar.gz"
+ARCHIVE="dist/zimport-tools-${VERSION}.tar.gz"
 log "生成交付包 $ARCHIVE"
 git archive --format=tar.gz --prefix="zimport-tools/" -o "$ARCHIVE" "$TAG"
 
 log "发版完成:$TAG"
 echo "  交付包: $ROOT/$ARCHIVE"
-echo "  GitHub: https://github.com/jiulin-hou/ZImport/releases/tag/$TAG"
+echo "  GitHub: https://github.com/jiulin-hou/ZImport-tools/releases/tag/$TAG"
