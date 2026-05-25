@@ -6,6 +6,37 @@
 2. 运行 `bash deploy/release.sh X.Y.Z` —— 自动跑测试、写版本号、提交、
    打 tag、推送 main 与 tag、生成 `dist/zimport-tools-X.Y.Z.tar.gz`
 
+## v1.2.0 — 2026-05-25
+
+聚焦把项目精简为「纯 Zimbra 工具组件」单一形态,去掉所有"独立机器
+部署"残留 + 简化鉴权/配置/CSRF 三块。
+
+**简化**
+
+- **鉴权改 stateless**:删 Flask session、删 `SESSION_COOKIE_*` 设置、
+  identity 通过 `flask.g` 在请求范围内传递;每个请求直接
+  `zimbra_session.validate(token)`(LRU 5 分钟缓存兜底),用户切换
+  Zimbra 账号瞬间识别到新身份,无 session 串号风险也不再需要 hash
+  比对。配置文件的 `[server] secret_key` 字段不再被使用(保留读取
+  兼容旧 config.ini)。
+- **删 `[server] web_origins` 白名单**:CSRF 防御只靠 `X-Zimport-CSRF`
+  自定义头(浏览器跨站表单设不了 X-* 头,够防御);少一项生产环境
+  踩坑配置。
+- **`setup-proxy.sh` 只做一件事**:在 Zimbra 主 443 server 块加
+  `location ^~ /zimport-tools/` 反代 8088。删掉早期的"独立 29443
+  端口"模式(原本是给"非 Zimbra 同机"场景留的退路)。
+- **`setup.sh` 不再生成 `secret_key`**:无 Flask session 后这玩意儿
+  没有用。
+- **README + deploy/README 重写**:明确单一部署线 "Zimbra 同机 +
+  zimlet 唯一入口",删掉所有"独立机器/独立端口/多端口选项"段落。
+
+**向后兼容性**
+
+- 旧 `/etc/zimport-tools/config.ini` 里如有 `secret_key` /
+  `web_origins` 字段不需要手动删除(被忽略)。
+- 旧 `nginx.conf.zimport-tools` 文件(29443 listener)如有遗留也不
+  需要手动删,但建议清掉避免 nginx 多绑无谓端口。
+
 ## v1.1.0 — 2026-05-25
 
 针对在 Zimbra 8.8.15 同机生产环境部署时暴露出的问题做的修复与改进。
