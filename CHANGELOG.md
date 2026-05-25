@@ -6,6 +6,69 @@
 2. 运行 `bash deploy/release.sh X.Y.Z` —— 自动跑测试、写版本号、提交、
    打 tag、推送 main 与 tag、生成 `dist/zimport-tools-X.Y.Z.tar.gz`
 
+## v1.3.0 — 2026-05-25
+
+围绕"邮件导入流程 / 检测提示"的体验和能力升级。后端 API 扩展 +
+前端大改。测试 101 → 110。
+
+**新功能**
+
+- **dry_run 预览**:`POST /api/import` 接受 `dry_run=true`,worker
+  跑去重 + 模拟 inject 但不实际写入。结果就是预览,前端按"先预览"
+  按钮触发,完成后任务上有「预览」标记,看完点"重试"即可真实导入。
+- **取消任务**:`POST /api/tasks/<id>/cancel`(owner / admin 才能),
+  queued 任务直接 cancelled,running 任务进入 cancelling,worker
+  在下一封 eml 前感知并停止(已 inject 的邮件不回滚)。
+- **新建文件夹**:`POST /api/folders { path }` 走 Zimbra SOAP
+  `CreateFolderRequest`,前端目标文件夹旁多一个"+新建"按钮,
+  不再需要切到 Zimbra Web 建好再回来。
+- **任务备注**:`api/import` 接 `label`,任务表多一列。
+- **只重试失败**:`POST /api/tasks/<id>/retry { only_failed: true }`
+  通过原任务的 failures 提取所有非 duplicate 文件名,新任务 `keep_files`
+  限制 worker 只处理这些(其他文件直接跳过);避免对 1000 封里只
+  3 封失败的任务整批重跑。
+- **失败原因中文归类**:`InjectError` 加 `code`(network / transient /
+  quota / permission / invalid / unknown),`reason` 直接是中文短句;
+  前端按 code 分组展示。再也不会给用户看 Zimbra 返回的英文 HTML 错误页。
+- **`timestamp=0` 给 tgz 导入**:让 Zimbra 用每封邮件 Date 头作 received
+  date 而不是导入时间。
+- **续传 UI**:`uploadFile` 先 query `/api/upload/status` 拿 missing
+  分片集,只补传缺失部分;`upload_id + 文件指纹` 存 `localStorage`,
+  浏览器刷新后提示用户"发现未完成的上传,重新选同一文件继续"。
+- **上传进度阶段化 + ETA**:上传 / 排队 / 处理 三段独立显示,上传
+  阶段滚动平均最近 10 片速率算 ETA。
+- **失败原因展示按归类**:任务详情按 `code` 把失败分类汇总,跳过
+  独立成块(原本和失败混在一起)。
+
+**性能**
+
+- **batch dedupe**:worker 进 eml 循环前一次性 SOAP 查询所有
+  Message-ID(每页 50 条),从 N 次 SOAP 降到 N/50。1000 封邮件
+  从理论 1000 次 SOAP 降到 20 次。`zimbra_inject.batch_existing_message_ids`。
+
+**Schema**
+
+- `tasks` 表新增 `label TEXT`、`dry_run INTEGER`、`keep_files TEXT`
+  三列;status 枚举新增 `cancelling` / `cancelled`(`purge_old`
+  把 cancelled 也算"可清理"状态)。所有变更走 idempotent `ALTER TABLE`,
+  老 DB 升级无需手动迁移。
+
+**前端**
+
+- 重写 `app.js`(229 → 425 行),拆出 `runImport` / `uploadFile` /
+  `actionLinks` / `bindActionLinks` / `showTaskDetail` / `toast` 等。
+- 任务行操作:`详情 · 取消 · 重试 · 只重试失败` 根据任务状态动态显示。
+- 取消 / 创建文件夹 / retry 走 toast 反馈,不再 `alert`。
+
+**测试覆盖(+9)**
+
+- import 带 label + dry_run 持久化
+- cancel queued / running / done 状态机
+- cancel 越权 403
+- create_folder 正常 + 拒收 unsafe path
+- retry only_failed 计算 keep_files 正确(排除 duplicate)
+- retry only_failed 无非 duplicate 失败时返回 400
+
 ## v1.2.3 — 2026-05-25
 
 完整一轮代码 review + 安全审计 + 测试覆盖评估发现的问题修复。
