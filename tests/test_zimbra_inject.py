@@ -160,3 +160,17 @@ def test_inject_tgz_builds_correct_request(tmp_path, monkeypatch):
     zimbra_inject.inject_tgz(_Cfg, "u@d", "TOK", str(tgz))
     assert captured["url"] == "https://h:8443/home/u@d/"
     assert captured["params"]["fmt"] == "tgz"
+
+
+def test_batch_existing_message_ids_returns_only_present(monkeypatch):
+    """Regression for v1.3.0 bug: Zimbra SearchResponse hits don't carry
+    Message-ID, so any batch implementation that relies on per-hit mid lookup
+    silently returns empty -> dedupe goes dark and user re-imports duplicates.
+    The contract is: pass a list of mids, get back the subset that exist."""
+    from zimport_tools import zimbra_inject
+    existing = {"<a@x>", "<c@x>"}
+    monkeypatch.setattr(zimbra_inject, "message_exists",
+                        lambda cfg, tok, mid: mid in existing)
+    result = zimbra_inject.batch_existing_message_ids(
+        _Cfg, "TOK", ["<a@x>", "<b@x>", "<c@x>", "", None])
+    assert result == {"<a@x>", "<c@x>"}

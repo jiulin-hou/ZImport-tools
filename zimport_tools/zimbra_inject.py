@@ -91,54 +91,18 @@ def message_exists(cfg, token, message_id):
     return len(hits) > 0
 
 
-def batch_existing_message_ids(cfg, token, message_ids, batch=50):
-    """Resolve in batches which of the given Message-IDs already exist in the
-    target mailbox. Returns a set of message_ids that exist. Failed queries
-    are treated as "unknown -> assume not present" so import isn't blocked."""
-    found = set()
-    cleaned = []
-    for mid in message_ids:
-        if not mid:
-            continue
-        safe = (mid.strip().strip('<>')
-                .replace('"', '').replace('\\', ''))
-        if safe:
-            cleaned.append((mid, safe))
+def batch_existing_message_ids(cfg, token, message_ids):
+    """Return the set of message_ids that already exist in the mailbox.
 
-    header = {"context": {"_jsns": "urn:zimbra",
-                          "authToken": {"_content": token}}}
-    for i in range(0, len(cleaned), batch):
-        chunk = cleaned[i:i + batch]
-        # msgid:("A" OR "B" ...) - Zimbra search supports OR in this form
-        query = "msgid:(%s)" % " OR ".join('"%s"' % s for _, s in chunk)
-        body = {"SearchRequest": {
-            "_jsns": "urn:zimbraMail",
-            "query": query, "limit": len(chunk), "types": "message"}}
-        try:
-            r = requests.post(cfg.soap_url,
-                              json={"Header": header, "Body": body},
-                              verify=cfg.tls_verify(), timeout=60)
-            data = r.json()
-        except Exception:
-            continue
-        inner = data.get("Body", {})
-        if "Fault" in inner:
-            continue
-        hits = inner.get("SearchResponse", {}).get("m") or []
-        # Zimbra returns the message's Message-ID header in m[i]['mid'] or
-        # similar; if not present we cannot map back individually, so fall
-        # back to "any hit means treat all queried as present" which is
-        # safer-for-dedupe (false positives skip, false negatives import dup).
-        # In practice Zimbra returns mid in the hit dict for msgid: queries.
-        hit_mids = set()
-        for h in hits:
-            mid_val = (h.get("mid") or h.get("msgid") or "").strip().strip('<>')
-            if mid_val:
-                hit_mids.add(mid_val)
-        for orig, safe in chunk:
-            if safe in hit_mids:
-                found.add(orig)
-    return found
+    Implementation note: Zimbra's SearchResponse hits do NOT include the
+    Message-ID header value (we verified against 8.8.15 — hits expose
+    cid/cm/d/e/f/fr/id/l/rev/s/sf/su but no Message-ID), so a true OR-batch
+    query can't be reverse-mapped to individual mids. Until that is solved
+    we fall back to one SearchRequest per Message-ID; on a local Zimbra
+    this is ~10ms each, so 1000 emails ≈ 10s of dedupe overhead, which is
+    acceptable. Performance fix is tracked separately."""
+    return {mid for mid in message_ids
+            if mid and message_exists(cfg, token, mid)}
 
 
 def inject_eml(cfg, account, folder, token, eml_path):

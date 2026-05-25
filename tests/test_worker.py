@@ -233,3 +233,32 @@ def test_process_task_clears_stale_work_dir_on_retry(tmp_path, monkeypatch):
 
     worker.process_task(_Cfg, store, task)
     assert seen_work_dirs == [[]], "work dir should be empty when normalize runs"
+
+
+def test_process_task_dry_run_marks_existing_as_skipped(tmp_path, monkeypatch):
+    """End-to-end regression for the user-reported v1.3.0 issue: dry-run
+    over an eml that's already in the mailbox must show skipped=1,
+    not done=1."""
+    store = TaskStore(str(tmp_path / "wd2.db"))
+    temp_dir = tmp_path / "task_dryrun"
+    (temp_dir / "input").mkdir(parents=True)
+    (temp_dir / "input" / "dup.eml").write_bytes(b"a")
+    tid = store.create_task("u@d", "u@d", "Inbox", str(temp_dir),
+                            dry_run=True)
+    task = store.claim_next()
+    assert task["dry_run"] == 1
+
+    monkeypatch.setattr(worker.zimbra_auth, "delegate_token",
+                        lambda cfg, a: "TOK")
+    monkeypatch.setattr(worker.zimbra_inject, "read_message_id",
+                        lambda p: "<already@there>")
+    monkeypatch.setattr(worker.zimbra_inject, "batch_existing_message_ids",
+                        lambda cfg, tok, mids: set(mids))
+    monkeypatch.setattr(worker.zimbra_inject, "inject_eml",
+                        lambda *a, **kw: pytest.fail("dry-run must not inject"))
+
+    worker.process_task(_CfgDedupe, store, task)
+    result = store.get_task(tid)
+    assert result["status"] == "done"
+    assert result["skipped"] == 1, "邮箱里已有,dry-run 应该 skipped=1"
+    assert result["done"] == 0
