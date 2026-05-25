@@ -6,6 +6,45 @@
 2. 运行 `bash deploy/release.sh X.Y.Z` —— 自动跑测试、写版本号、提交、
    打 tag、推送 main 与 tag、生成 `dist/zimport-tools-X.Y.Z.tar.gz`
 
+## v1.4.4 — 2026-05-25
+
+**真实部署中暴露的问题修复 + 任务管理 UX 改进。**
+
+**Bug 修复**
+
+- `setup-proxy.sh` 写死了 `python3` 命令,但 CentOS 7 上 `setup.sh` 编译装的是
+  `/usr/local/bin/python3.11`(`make altinstall`,有意不创建 `python3`
+  软链)。`install.sh` 阶段 3 在干净 CentOS 7 上必然挂。改为优先用
+  `/usr/local/bin/python3.11`,回退到任意 `python3`
+
+**新功能 / UX 改进**
+
+- **任务详情行内展开** —— 原来所有任务的"详情"都灌进底下一个共享 div,
+  多任务时上下来回滚、且只能看一个;改为点击行(或"详情"链接)
+  **在该行下方直接插入一行展示详情**,可同时展开多个、各自独立、
+  视觉上紧贴对应任务。轮询刷新(3 秒一次)会保留已展开的详情,不会
+  把用户正在读的内容合上
+- **失败任务现在也能看详情** —— 原来"详情"链接只在 `skipped+failed>0`
+  时显示,任务整体失败(`status='failed'`,例如解包炸了、`delegate_token`
+  拒了、磁盘满)`failed=0` 链接根本不出来,`t.error` 那段任务级原因
+  被埋了;现在 `failed`/`interrupted`/`cancelled` 状态或有 `t.error`
+  时也显示"详情",展开后 `<pre>` 里完整展示错误堆栈
+- **`archive.unpack_tgz` 加 magic-byte 检测** —— 原来信任 `.tgz` 后缀直接
+  `tarfile.open()`,撞上"名字叫 .tgz 但内容不是 gzip"(常见误命名:
+  老 Unix `compress` `.Z`、ZIP、RAR、7z、空文件)会抛 Python 的
+  `ReadError` 多方法堆栈,用户看天书。现在打开前 sniff 前 512 字节,
+  识别 7 种常见格式,**给一句话能看懂的中文错误**告诉用户具体是哪种
+  格式、怎么改
+- **任务终态加"删除"按钮** —— 之前任务只能等保留期到了自动清,不能手动
+  删。新增 `POST /api/tasks/<id>/delete`(login_required + CSRF + 鉴权:
+  requester 或 admin)和前端"删除"链接,弹 confirm 后删 SQLite 行 +
+  `rmtree` temp_dir。运行中/排队中的任务拒绝直接删(要先取消)
+- **默认保留期 `retention_days` 从 7 天改为 3 天** —— 7 天觉得偏长,
+  临时上传的大文件不该攒太久。已有部署改 `/etc/zimport-tools/config.ini`
+  生效
+
+**测试新增 7 个,总计 130 passed。**
+
 ## v1.4.3 — 2026-05-25
 
 **真正的一键部署 + README 修正过时链接**
