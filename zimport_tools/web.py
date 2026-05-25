@@ -162,6 +162,25 @@ def create_app(cfg):
             return jsonify({"error": "仅排队/运行中的任务可取消"}), 400
         return jsonify({"status": new_status})
 
+    @app.route("/api/tasks/<task_id>/delete", methods=["POST"])
+    @login_required
+    def delete_task(task_id):
+        task = store.get_task(task_id)
+        if task is None:
+            return jsonify({"error": "任务不存在"}), 404
+        if task["requester"] != g.account and not g.is_admin:
+            return jsonify({"error": "无权删除此任务"}), 403
+        # Running tasks must be cancelled first (worker holds open file
+        # handles in temp_dir; deleting under its feet would leave half-state).
+        if task["status"] in ("queued", "running", "cancelling"):
+            return jsonify({
+                "error": "请先取消任务再删除(正在运行的任务不能直接删)"
+            }), 400
+        temp_dir = store.delete_task(task_id)
+        if temp_dir and os.path.isdir(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        return jsonify({"ok": True})
+
     @app.route("/api/tasks/<task_id>/retry", methods=["POST"])
     @login_required
     def retry_task(task_id):

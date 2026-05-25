@@ -230,6 +230,61 @@ def test_retry_404_when_missing(app, patch_validate):
                        headers=_csrf()).status_code == 404
 
 
+# ---- /api/tasks/<id>/delete ----
+
+def test_delete_removes_task_and_temp_dir(app, patch_validate, tmp_path):
+    from zimport_tools.store import TaskStore
+    store = TaskStore(str(tmp_path / "t.db"))
+    td = tmp_path / "td"
+    td.mkdir()
+    (td / "input").mkdir()
+    (td / "input" / "a.eml").write_bytes(b"x")
+    tid = store.create_task(account="u@d", requester="u@d",
+                            target_folder="Inbox", temp_dir=str(td))
+    store.set_status(tid, "done")
+    client = _logged_in(app, patch_validate)
+    resp = client.post("/api/tasks/" + tid + "/delete", headers=_csrf())
+    assert resp.status_code == 200, resp.get_json()
+    assert store.get_task(tid) is None  # row gone
+    assert not td.exists()              # temp_dir wiped
+
+
+def test_delete_404_when_missing(app, patch_validate):
+    client = _logged_in(app, patch_validate)
+    assert client.post("/api/tasks/nosuch/delete",
+                       headers=_csrf()).status_code == 404
+
+
+def test_delete_403_for_other_user(app, patch_validate, tmp_path):
+    from zimport_tools.store import TaskStore
+    store = TaskStore(str(tmp_path / "t.db"))
+    td = tmp_path / "td"
+    td.mkdir()
+    tid = store.create_task(account="other@d", requester="other@d",
+                            target_folder="Inbox", temp_dir=str(td))
+    store.set_status(tid, "done")
+    client = _logged_in(app, patch_validate)  # logs in as u@d
+    resp = client.post("/api/tasks/" + tid + "/delete", headers=_csrf())
+    assert resp.status_code == 403
+
+
+def test_delete_400_when_task_still_active(app, patch_validate, tmp_path):
+    """Active (queued/running/cancelling) tasks can't be deleted directly —
+    cancel them first."""
+    from zimport_tools.store import TaskStore
+    store = TaskStore(str(tmp_path / "t.db"))
+    td = tmp_path / "td"
+    td.mkdir()
+    tid = store.create_task(account="u@d", requester="u@d",
+                            target_folder="Inbox", temp_dir=str(td))
+    # default status = queued
+    client = _logged_in(app, patch_validate)
+    resp = client.post("/api/tasks/" + tid + "/delete", headers=_csrf())
+    assert resp.status_code == 400
+    assert store.get_task(tid) is not None  # task NOT deleted
+    assert td.exists()                       # temp_dir NOT wiped
+
+
 def test_retry_400_when_status_not_failed(app, patch_validate, tmp_path,
                                           monkeypatch):
     """status=queued/done/running 都不应该让重试。"""

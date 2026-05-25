@@ -413,6 +413,10 @@ function actionLinks(t) {
       out.push(`<a href="#" data-tid="${esc(t.id)}" class="link-retry-only-failed">只重试失败</a>`);
     }
   }
+  // 终态任务可删除(运行中要先取消)
+  if (["done", "failed", "interrupted", "cancelled"].includes(t.status)) {
+    out.push(`<a href="#" data-tid="${esc(t.id)}" class="link-delete">删除</a>`);
+  }
   return out.join(" · ");
 }
 
@@ -437,6 +441,19 @@ function bindActionLinks(root) {
   });
   root.querySelectorAll(".link-retry-only-failed").forEach(a => {
     a.onclick = (e) => { e.preventDefault(); doRetry(a.dataset.tid, true); };
+  });
+  root.querySelectorAll(".link-delete").forEach(a => {
+    a.onclick = async (e) => {
+      e.preventDefault();
+      if (!confirm("删除该任务?上传过的文件、进度记录会一并清掉,不可恢复。")) return;
+      const r = await apiFetch("api/tasks/" + encodeURIComponent(a.dataset.tid)
+                                + "/delete", { method: "POST" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { toast(data.error || "删除失败", "err"); return; }
+      expandedDetails.delete(a.dataset.tid);  // forget any open detail row
+      toast("已删除", "ok");
+      refreshTasks();
+    };
   });
 }
 

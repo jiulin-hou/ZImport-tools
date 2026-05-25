@@ -232,6 +232,22 @@ class TaskStore:
         finally:
             conn.close()
 
+    def delete_task(self, task_id):
+        """Remove a single task row. Returns its temp_dir (so the caller
+        can rmtree it) or None if no such task. Caller is responsible for
+        any auth/ownership/status checks."""
+        conn = self._conn()
+        try:
+            row = conn.execute("SELECT temp_dir FROM tasks WHERE id=?",
+                               (task_id,)).fetchone()
+            if row is None:
+                return None
+            conn.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+            conn.commit()
+            return row["temp_dir"]
+        finally:
+            conn.close()
+
     def _update(self, task_id, fields):
         fields = dict(fields)
         fields["updated_at"] = _now()
