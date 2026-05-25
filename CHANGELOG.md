@@ -6,6 +6,30 @@
 2. 运行 `bash deploy/release.sh X.Y.Z` —— 自动跑测试、写版本号、提交、
    打 tag、推送 main 与 tag、生成 `dist/zimport-tools-X.Y.Z.tar.gz`
 
+## v1.4.5 — 2026-05-25
+
+**「管理员目标账户」从文本输入 / autocomplete 改为真 `<select>` 下拉。**
+
+之前 v1.4.0 的重构把目标账户改成了纯文本输入框,要管理员靠记忆敲账号名 ——
+对几十个账户的小组织没必要这么硬。
+
+- 新增 `zimbra_search.list_accounts(cfg, limit=500)` 和
+  `GET /api/admin/accounts` 端点(管理员-only),用服务账号发
+  `SearchDirectoryRequest`(`objectClass=zimbraAccount`)拉所有账户,
+  按 name 排序返回
+- 前端 `<input>` + `<datalist>` 换成 `<select id="targetAccount">`,
+  管理员登录时一次性填充所有 `<option>`,显示格式
+  `部门/姓名 — name@domain`
+- **过滤掉不该出现在下拉里的账户**:
+  - Zimbra 内置系统账户(`galsync.*` / `spam.*` / `ham.*` /
+    `virus-quarantine.*`)
+  - ZImport-tools 自己的服务账号(由 `cfg.svc_name` 配置,大小写不敏感
+    匹配)—— 是工具内部代理身份,任何人导邮件进它都没意义
+  - **当前登录的管理员自己**(前端过滤)—— 因为下拉第一项
+    `(导入到自己)` 已经覆盖这种情况,再列一遍只让人迷惑
+- `search_accounts`(给将来可能的搜索 UI 用)也加了相同的过滤,
+  保持两套接口语义一致
+
 ## v1.4.4 — 2026-05-25
 
 **真实部署中暴露的问题修复 + 任务管理 UX 改进。**
