@@ -19,8 +19,10 @@
     <p>当前登录:<b id="who"></b></p>
     <div id="resumeBanner" class="hidden"></div>
     <div id="adminBox" class="hidden">
-      <label>目标账户(管理员):<input id="targetAccount"
-        placeholder="留空=导入到自己"></label>
+      <label>目标账户(管理员):<input id="targetAccount" type="search"
+        list="accountList" autocomplete="off" spellcheck="false"
+        placeholder="留空=导入到自己;或输入 2+ 字符搜索"></label>
+      <datalist id="accountList"></datalist>
     </div>
     <label>目标文件夹:
       <span class="folder-row">

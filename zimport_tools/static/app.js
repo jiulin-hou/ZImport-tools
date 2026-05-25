@@ -100,6 +100,34 @@ async function loadFolders() {
 }
 
 $("targetAccount").addEventListener("change", loadFolders);
+
+// ------- 管理员目标账户 autocomplete -------
+// 输入 2+ 字符触发 SearchDirectoryRequest;debounce 250ms 防止打字时刷请求。
+let _acctSearchTimer = null;
+$("targetAccount").addEventListener("input", () => {
+  if (!session || !session.is_admin) return;  // 非管理员不搜
+  if (_acctSearchTimer) clearTimeout(_acctSearchTimer);
+  _acctSearchTimer = setTimeout(searchAdminAccounts, 250);
+});
+
+async function searchAdminAccounts() {
+  const q = $("targetAccount").value.trim();
+  const dl = $("accountList");
+  if (q.length < 2) { dl.innerHTML = ""; return; }
+  try {
+    const r = await apiFetch("api/admin/accounts/search?q=" +
+                              encodeURIComponent(q));
+    if (!r.ok) return;
+    const data = await r.json();
+    dl.innerHTML = "";
+    for (const acc of data.accounts || []) {
+      const opt = document.createElement("option");
+      opt.value = acc.name;
+      if (acc.display) opt.label = acc.display + " — " + acc.name;
+      dl.appendChild(opt);
+    }
+  } catch (e) { /* apiFetch 已处理 401 等 */ }
+}
 $("retryBtn").onclick = probeSession;
 $("refreshBtn").onclick = refreshTasks;
 
