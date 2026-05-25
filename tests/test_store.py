@@ -91,3 +91,26 @@ def test_purge_old_does_not_delete_queued_or_running(tmp_path):
     assert removed == []
     assert store.get_task(queued) is not None
     assert store.get_task(running) is not None
+
+
+def test_recover_interrupted_also_recovers_cancelling(tmp_path):
+    """Worker that died after the user pressed cancel but before flipping
+    the task to 'cancelled' must not leave the task hanging at 'cancelling'
+    forever. recover_interrupted() runs on worker startup and should sweep
+    both running and cancelling into 'interrupted'."""
+    from zimport_tools.store import TaskStore
+    store = TaskStore(str(tmp_path / "recov.db"))
+    td = tmp_path / "td"
+    td.mkdir()
+    a = store.create_task("u@d", "u@d", "Inbox", str(td))
+    b = store.create_task("u@d", "u@d", "Inbox", str(td))
+    c = store.create_task("u@d", "u@d", "Inbox", str(td))
+    store.set_status(a, "running")
+    store.set_status(b, "cancelling")
+    store.set_status(c, "done")  # should NOT be touched
+
+    store.recover_interrupted()
+
+    assert store.get_task(a)["status"] == "interrupted"
+    assert store.get_task(b)["status"] == "interrupted"  # the key case
+    assert store.get_task(c)["status"] == "done"

@@ -190,10 +190,19 @@ class TaskStore:
             conn.close()
 
     def recover_interrupted(self):
+        """On worker startup, sweep up tasks left in an in-progress state by
+        the previous process exit (crash, SIGTERM, OOM, …). Without this:
+          - 'running'    -> task displays as running forever; user can't retry.
+          - 'cancelling' -> user cancelled but worker died before flipping to
+                            cancelled; task hangs indefinitely and purge_old
+                            never sweeps it.
+        Both become 'interrupted', which is retriable and purge_old-eligible.
+        """
         conn = self._conn()
         try:
-            conn.execute("UPDATE tasks SET status='interrupted', updated_at=? "
-                         "WHERE status='running'", (_now(),))
+            conn.execute(
+                "UPDATE tasks SET status='interrupted', updated_at=? "
+                "WHERE status IN ('running', 'cancelling')", (_now(),))
             conn.commit()
         finally:
             conn.close()

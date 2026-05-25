@@ -103,6 +103,16 @@ $("targetAccount").addEventListener("change", loadFolders);
 $("retryBtn").onclick = probeSession;
 $("refreshBtn").onclick = refreshTasks;
 
+// Resume edge case: if the user has a pending upload, they need to re-pick
+// the *same* file to continue. Browsers won't fire 'change' when the
+// selected file is identical to the current input value, so we clear the
+// value on click before the file picker opens. We only do this when there's
+// a pending upload — otherwise users would lose their already-picked files
+// just by clicking the input again.
+$("files").addEventListener("click", function () {
+  if (loadPending()) this.value = "";
+});
+
 $("newFolderBtn").onclick = async () => {
   // Default to "<current folder>/新子文件夹" so a user who has selected
   // Inbox/2024/Q3 and clicks "+ 新建" starts from that prefix rather than
@@ -350,6 +360,7 @@ async function refreshTasks() {
     const skipped = t.skipped || 0;
     const failed = t.failed || 0;
     const tr = document.createElement("tr");
+    tr.title = "完整任务 ID:" + t.id;
     tr.innerHTML =
       `<td>${esc(t.id.slice(0, 8))}</td>` +
       `<td>${esc(t.label || "")}</td>` +
