@@ -10,7 +10,6 @@ class _Cfg:
     db_path = None
     queue_limit = 50
     max_task_bytes = 10 ** 12
-    chunk_size = 1024
     rest_base = "https://h:8443"
     verify_tls = False
 

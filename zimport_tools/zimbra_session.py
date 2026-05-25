@@ -10,7 +10,6 @@ in-memory cache absorbs that, while still expiring quickly enough that a
 revoked or expired token stops working within seconds.
 """
 
-import hashlib
 import threading
 import time
 from collections import OrderedDict
@@ -121,9 +120,3 @@ def _admin_from_attrs(info):
     attrs = info.get("attrs", {}).get("_attrs", {})
     val = attrs.get("zimbraIsAdminAccount")
     return str(val).upper() == "TRUE"
-
-
-def token_hash(token):
-    """Stable hash of a token for storage in session (so the raw token value
-    never lives in the Flask session cookie)."""
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:32]
