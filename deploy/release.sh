@@ -58,11 +58,18 @@ if [ -n "$EXTRA" ]; then
 fi
 
 # --- 测试 ---------------------------------------------------------------
-if [ -x venv/bin/python ]; then
-    log "运行测试套件"
-    venv/bin/python -m pytest tests/ -q
+# 优先用项目 venv,其次用任意系统 python3 + pytest,都没有才警告跳过。
+PYTEST_CMD=""
+if [ -x venv/bin/python ] && venv/bin/python -m pytest --version >/dev/null 2>&1; then
+    PYTEST_CMD="venv/bin/python -m pytest"
+elif command -v python3 >/dev/null 2>&1 && python3 -m pytest --version >/dev/null 2>&1; then
+    PYTEST_CMD="python3 -m pytest"
+fi
+if [ -n "$PYTEST_CMD" ]; then
+    log "运行测试套件($PYTEST_CMD)"
+    PYTHONPATH=. $PYTEST_CMD tests/ -q
 else
-    err "未找到 venv,跳过测试(建议先建 venv 再发版)。"
+    err "未找到可用 pytest(venv 和 python3 都没装),跳过测试。"
 fi
 
 # --- 写版本号 -----------------------------------------------------------
@@ -85,6 +92,24 @@ mkdir -p dist
 ARCHIVE="dist/zimport-tools-${VERSION}.tar.gz"
 log "生成交付包 $ARCHIVE"
 git archive --format=tar.gz --prefix="zimport-tools/" -o "$ARCHIVE" "$TAG"
+
+# --- GitHub Release(可选)---------------------------------------------
+# 如果装了 gh 且已 `gh auth login`,自动创建 GitHub Release 条目并把
+# 交付包作为附件挂上。从 CHANGELOG.md 提取本版段落作为 release notes。
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    log "创建 GitHub Release $TAG(挂交付包)"
+    NOTES=$(awk -v tag="$TAG" '
+        $0 ~ "^## "tag" " { capture=1; next }
+        capture && /^## v/ { exit }
+        capture { print }
+    ' CHANGELOG.md)
+    gh release create "$TAG" "$ARCHIVE" \
+        --title "$TAG" \
+        --notes "${NOTES:-See CHANGELOG.md}"
+else
+    log "跳过 GitHub Release 自动创建(gh 未装或未认证)"
+    log "  手动:gh release create $TAG $ARCHIVE --notes-file CHANGELOG.md"
+fi
 
 log "发版完成:$TAG"
 echo "  交付包: $ROOT/$ARCHIVE"

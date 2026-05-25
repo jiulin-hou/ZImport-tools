@@ -1,6 +1,6 @@
 const CHUNK = 10 * 1024 * 1024; // 10MB
 let pollTimer = null;
-let session = null; // {account, is_admin}
+let identity = null; // {account, is_admin}
 
 function $(id) { return document.getElementById(id); }
 
@@ -44,9 +44,9 @@ async function probeSession() {
     showError("无法识别身份(状态码 " + r.status + ")。");
     return;
   }
-  session = await r.json();
-  $("who").textContent = session.account;
-  $("adminBox").classList.toggle("hidden", !session.is_admin);
+  identity = await r.json();
+  $("who").textContent = identity.account;
+  $("adminBox").classList.toggle("hidden", !identity.is_admin);
   await loadFolders();
   showOnly("main");
   refreshTasks();
@@ -207,4 +207,12 @@ function statusText(s) {
            failed: "失败", interrupted: "中断" }[s] || s;
 }
 
+async function loadVersion() {
+  try {
+    const r = await fetch("api/version");
+    if (r.ok) $("version").textContent = "v" + (await r.json()).version;
+  } catch (e) { /* ignore — footer just shows placeholder */ }
+}
+
 probeSession();
+loadVersion();

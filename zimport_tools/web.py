@@ -17,8 +17,8 @@ import shutil
 
 from flask import Flask, g, jsonify, request, send_from_directory
 
-from zimport_tools import (archive, uploads, zimbra_auth, zimbra_folders,
-                           zimbra_search, zimbra_session)
+from zimport_tools import (__version__, archive, uploads, zimbra_auth,
+                           zimbra_folders, zimbra_search, zimbra_session)
 from zimport_tools.store import TaskStore
 from zimport_tools.zimbra_auth import AuthError
 
@@ -83,7 +83,11 @@ def create_app(cfg):
     def static_files(name):
         return send_from_directory(_STATIC, name)
 
-    # --- identity ------------------------------------------------------
+    # --- identity / version -------------------------------------------
+
+    @app.route("/api/version")
+    def version():
+        return jsonify({"version": __version__})
 
     @app.route("/api/me")
     @login_required

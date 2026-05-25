@@ -302,6 +302,13 @@ td .bar { display: inline-block; width: 100px; vertical-align: middle; }
   margin-top: 8px;
 }
 
+#footer {
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 16px 0 24px;
+}
+
 #taskDetail {
   margin-top: 16px;
   padding: 14px 16px;
