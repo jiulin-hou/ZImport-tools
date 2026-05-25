@@ -6,6 +6,27 @@
 2. 运行 `bash deploy/release.sh X.Y.Z` —— 自动跑测试、写版本号、提交、
    打 tag、推送 main 与 tag、生成 `dist/zimport-tools-X.Y.Z.tar.gz`
 
+## v1.4.1 — 2026-05-25
+
+零零碎碎的"知道就好"项也都修了。
+
+- **`store.recover_interrupted` 同时处理 `cancelling`**:worker 进
+  程在标 cancelled 之前异常退出(SIGTERM/OOM/崩),任务会卡
+  `cancelling` 永远不动,`purge_old` 不会清(它只看 done/failed/
+  interrupted/cancelled)。改成 `WHERE status IN ('running',
+  'cancelling')`,两种 in-progress 状态都被扫成 interrupted,可重
+  试也会被定期清理。
+- **任务行 hover 显示完整任务 ID**:`<tr title="完整任务 ID:...">`,
+  排错时不用再去 sqlite 翻。
+- **续传:点 file input 时清 `value`**:浏览器对"选了完全相同的
+  文件"不触发 `change`,续传 UI 看起来没反应。仅在有 pending
+  upload 时清空,普通用户无感。
+
+**回归测试(+1)**
+- `test_recover_interrupted_also_recovers_cancelling`:验证 a
+  `running` task and a `cancelling` task both end up `interrupted`
+  after recover_interrupted runs, while `done` is untouched.
+
 ## v1.4.0 — 2026-05-25
 
 审计 v1.3.x 发现的"前后端不对齐 / 空头承诺"做集中收拾。**移除
