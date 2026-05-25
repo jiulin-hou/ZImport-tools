@@ -85,7 +85,12 @@ def process_task(cfg, store, task):
                                       skipped=skipped)
             store.set_failures(tid, failures)
         store.set_status(tid, "done")
-    except Exception as exc:  # noqa: BLE001 - top-level catch, any failure recorded
+    except Exception as exc:  # noqa: BLE001
+        # Catch everything: any uncaught exception here (zimbra unreachable,
+        # disk full, malformed eml, etc.) must be recorded against THIS task
+        # and not bubble up to crash the worker loop — the next claim_next
+        # would otherwise leave the user stuck on a permanently "running"
+        # task.
         store.set_status(tid, "failed", error=str(exc))
 
 

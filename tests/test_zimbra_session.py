@@ -15,6 +15,10 @@ class _Cfg:
     soap_url = "https://h:8443/service/soap"
     verify_tls = False
 
+    @staticmethod
+    def tls_verify():
+        return False
+
 
 def _info_ok(account="u@d", is_admin="FALSE"):
     return {"Body": {"GetInfoResponse": {

@@ -16,7 +16,7 @@ def list_folders(cfg, account_token):
     body = {"GetFolderRequest": {"_jsns": "urn:zimbraMail"}}
     r = requests.post(cfg.soap_url,
                       json={"Header": header, "Body": body},
-                      verify=cfg.verify_tls, timeout=30)
+                      verify=cfg.tls_verify(), timeout=30)
     data = r.json()
     inner = data.get("Body", {})
     if "Fault" in inner:

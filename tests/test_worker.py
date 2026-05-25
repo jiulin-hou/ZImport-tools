@@ -176,3 +176,60 @@ def test_process_task_marks_failed_on_unpack_error(tmp_path, monkeypatch):
     result = store.get_task(tid)
     assert result["status"] == "failed"
     assert "corrupt" in result["error"]
+
+
+def test_process_task_marks_failed_on_tgz_inject_error(tmp_path, monkeypatch):
+    """The zimbra-export (tgz) branch must record failure if inject_tgz raises."""
+    store = TaskStore(str(tmp_path / "w4.db"))
+    temp_dir = tmp_path / "task_tgz"
+    (temp_dir / "input").mkdir(parents=True)
+    tid = store.create_task("u@d", "u@d", "Inbox", str(temp_dir))
+    task = store.claim_next()
+
+    monkeypatch.setattr(worker.zimbra_auth, "delegate_token",
+                        lambda cfg, acct: "TOK")
+    # Make archive.normalize return a fake "zimbra-export" Normalized
+    fake = archive.NormalizedInput(kind="zimbra-export", eml_paths=[],
+                              repacked_tgz=str(temp_dir / "x.tgz"))
+    monkeypatch.setattr(worker.archive, "normalize", lambda *a, **kw: fake)
+
+    def boom(cfg, acct, tok, path):
+        raise worker.zimbra_inject.InjectError("HTTP 500: zimbra exploded")
+
+    monkeypatch.setattr(worker.zimbra_inject, "inject_tgz", boom)
+    worker.process_task(_Cfg, store, task)
+    result = store.get_task(tid)
+    assert result["status"] == "failed"
+    assert "500" in result["error"]
+
+
+def test_process_task_clears_stale_work_dir_on_retry(tmp_path, monkeypatch):
+    """If 'work/' has leftover files from a previous failed run, they must
+    be wiped before normalize is called again — otherwise stale artifacts
+    contaminate the new attempt."""
+    store = TaskStore(str(tmp_path / "w5.db"))
+    temp_dir = tmp_path / "task_retry"
+    (temp_dir / "input").mkdir(parents=True)
+    (temp_dir / "input" / "a.eml").write_bytes(b"a")
+    stale_work = temp_dir / "work"
+    stale_work.mkdir()
+    (stale_work / "leftover.txt").write_bytes(b"stale junk")
+    tid = store.create_task("u@d", "u@d", "Inbox", str(temp_dir))
+    task = store.claim_next()
+
+    seen_work_dirs = []
+
+    def fake_normalize(input_dir, work_dir):
+        seen_work_dirs.append(sorted(os.listdir(work_dir)))
+        return archive.NormalizedInput(kind="eml-bundle",
+                                  eml_paths=[os.path.join(input_dir, "a.eml")],
+                                  repacked_tgz=None)
+
+    monkeypatch.setattr(worker.archive, "normalize", fake_normalize)
+    monkeypatch.setattr(worker.zimbra_auth, "delegate_token",
+                        lambda cfg, acct: "TOK")
+    monkeypatch.setattr(worker.zimbra_inject, "inject_eml",
+                        lambda *a, **kw: None)
+
+    worker.process_task(_Cfg, store, task)
+    assert seen_work_dirs == [[]], "work dir should be empty when normalize runs"

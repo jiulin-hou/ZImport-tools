@@ -32,6 +32,36 @@ def _valid_upload_id(upload_id):
     return bool(upload_id) and bool(_UPLOAD_ID_RE.match(upload_id))
 
 
+def _safe_folder(folder):
+    """Reject folder names that could rewrite the Zimbra REST URL or escape
+    the target mailbox tree. Allows arbitrary text otherwise (Chinese,
+    spaces, etc.) — zimbra_inject percent-encodes the final value."""
+    if not folder or len(folder) > 512:
+        return False
+    if any(ord(c) < 0x20 for c in folder):  # control chars incl. NUL/CR/LF
+        return False
+    if any(c in folder for c in "?#%"):
+        return False
+    for seg in folder.split("/"):
+        if seg in ("..", "."):
+            return False
+    return True
+
+
+_MAX_INDEX = 10000
+
+
+def _bounded_int(raw):
+    """Parse an int and require 0 <= n < _MAX_INDEX. Returns None if invalid."""
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if n < 0 or n >= _MAX_INDEX:
+        return None
+    return n
+
+
 def _queue_limit_for(store, cfg):
     """Return the remaining queue capacity (exposed module-level for tests)."""
     return cfg.queue_limit - store.count_active()
@@ -125,9 +155,13 @@ def create_app(cfg):
             return jsonify({"error": "任务文件已被清理,无法重试"}), 410
         if _queue_limit_for(store, cfg) <= 0:
             return jsonify({"error": "任务队列已满,请稍后再试"}), 429
+        # Keep the original requester so the task stays visible in the
+        # original author's /api/tasks list; an admin re-running a failed
+        # job for someone else should not orphan that user from their own
+        # task history.
         new_id = store.create_task(
             account=task["account"],
-            requester=g.account,
+            requester=task["requester"],
             target_folder=task["target_folder"],
             temp_dir=task["temp_dir"])
         return jsonify({"task_id": new_id})
@@ -170,24 +204,28 @@ def create_app(cfg):
     @app.route("/api/upload/chunk", methods=["POST"])
     @login_required
     def upload_chunk():
-        upload_id = request.form["upload_id"]
+        upload_id = request.form.get("upload_id")
         if not _valid_upload_id(upload_id):
             return jsonify({"error": "无效的 upload_id"}), 400
-        file_index = int(request.form["file_index"])
-        chunk_index = int(request.form["chunk_index"])
-        blob = request.files["blob"].read()
+        file_index = _bounded_int(request.form.get("file_index"))
+        chunk_index = _bounded_int(request.form.get("chunk_index"))
+        blob_file = request.files.get("blob")
+        if file_index is None or chunk_index is None or blob_file is None:
+            return jsonify({"error": "缺少或无效的参数"}), 400
         uploads.save_chunk(cfg.temp_root, upload_id, file_index,
-                           chunk_index, blob)
+                           chunk_index, blob_file.read())
         return jsonify({"ok": True})
 
     @app.route("/api/upload/status")
     @login_required
     def upload_status():
-        upload_id = request.args["upload_id"]
+        upload_id = request.args.get("upload_id")
         if not _valid_upload_id(upload_id):
             return jsonify({"error": "无效的 upload_id"}), 400
-        file_index = int(request.args["file_index"])
-        total = int(request.args["total_chunks"])
+        file_index = _bounded_int(request.args.get("file_index"))
+        total = _bounded_int(request.args.get("total_chunks"))
+        if file_index is None or total is None:
+            return jsonify({"error": "缺少或无效的参数"}), 400
         missing = uploads.missing_chunks(cfg.temp_root, upload_id,
                                          file_index, total)
         return jsonify({"missing": missing})
@@ -201,11 +239,13 @@ def create_app(cfg):
             return jsonify({"error": "任务队列已满,请稍后再试"}), 429
 
         body = request.get_json(force=True, silent=True) or {}
-        upload_id = body["upload_id"]
+        upload_id = body.get("upload_id")
         if not _valid_upload_id(upload_id):
             return jsonify({"error": "无效的 upload_id"}), 400
-        files = body.get("files", [])
+        files = body.get("files") or []
         folder = body.get("folder") or "Inbox"
+        if not _safe_folder(folder):
+            return jsonify({"error": "无效的目标文件夹名"}), 400
 
         # 越权防护:管理员可指定目标账户,普通用户强制为本人
         account = g.account
@@ -213,8 +253,15 @@ def create_app(cfg):
             account = body["account"]
 
         for f in files:
-            uploads.merge_file(cfg.temp_root, upload_id, int(f["index"]),
-                               int(f["chunks"]), f["name"])
+            if not isinstance(f, dict):
+                return jsonify({"error": "无效的 files 项"}), 400
+            file_index = _bounded_int(f.get("index"))
+            chunks = _bounded_int(f.get("chunks"))
+            name = f.get("name")
+            if file_index is None or chunks is None or not name:
+                return jsonify({"error": "缺少或无效的文件元数据"}), 400
+            uploads.merge_file(cfg.temp_root, upload_id,
+                               file_index, chunks, name)
 
         input_path = uploads.input_dir(cfg.temp_root, upload_id)
         used = sum(os.path.getsize(os.path.join(input_path, n))

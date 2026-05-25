@@ -14,6 +14,10 @@ class _Cfg:
     soap_url = "https://h:8443/service/soap"
     admin_soap_url = "https://h:7071/service/admin/soap"
     verify_tls = False
+
+    @staticmethod
+    def tls_verify():
+        return False
     svc_name = "svc@d"
     svc_password = "svcpw"
 

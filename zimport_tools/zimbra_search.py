@@ -37,7 +37,7 @@ def search_accounts(cfg, query, limit=20):
         "attrs": "displayName"}}
     r = requests.post(cfg.admin_soap_url,
                       json={"Header": header, "Body": body},
-                      verify=cfg.verify_tls, timeout=30)
+                      verify=cfg.tls_verify(), timeout=30)
     data = r.json()
     inner = data.get("Body", {})
     if "Fault" in inner:

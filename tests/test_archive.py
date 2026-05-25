@@ -86,6 +86,20 @@ def test_normalize_loose_eml_files(tmp_path):
     assert len(result.eml_paths) == 2
 
 
+def test_normalize_picks_up_uppercase_eml_extension(tmp_path):
+    """Outlook / some exporters write .EML; the case-insensitive match must
+    catch them or the user silently sees 0 imported messages."""
+    inp = tmp_path / "input_upper"
+    inp.mkdir()
+    (inp / "MSG.EML").write_bytes(b"a")
+    (inp / "other.Eml").write_bytes(b"b")
+    work = tmp_path / "w_upper"
+    work.mkdir()
+    result = archive.normalize(str(inp), str(work))
+    assert result.kind == "eml-bundle"
+    assert len(result.eml_paths) == 2
+
+
 def test_normalize_zimbra_export_repacks_clean(tmp_path):
     inp = tmp_path / "input3"
     inp.mkdir()

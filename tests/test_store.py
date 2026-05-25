@@ -72,3 +72,22 @@ def test_purge_old_removes_aged_finished_tasks(tmp_path):
     assert "/tmp/old" in removed
     assert store.get_task(old) is None
     assert store.get_task(fresh) is not None
+
+
+def test_purge_old_does_not_delete_queued_or_running(tmp_path):
+    """Safety guard: even a backdated queued/running task must survive purge,
+    otherwise a stalled long-running import could be wiped mid-flight."""
+    import sqlite3
+    store = TaskStore(str(tmp_path / "purge_safe.db"))
+    queued = store.create_task("q@d", "q@d", "Inbox", "/tmp/q")
+    running = store.create_task("r@d", "r@d", "Inbox", "/tmp/r")
+    store.set_status(running, "running")
+    # Backdate both so the cutoff would otherwise catch them
+    conn = sqlite3.connect(str(tmp_path / "purge_safe.db"))
+    conn.execute("UPDATE tasks SET updated_at='2000-01-01T00:00:00'")
+    conn.commit()
+    conn.close()
+    removed = store.purge_old(7)
+    assert removed == []
+    assert store.get_task(queued) is not None
+    assert store.get_task(running) is not None

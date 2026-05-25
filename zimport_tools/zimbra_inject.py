@@ -1,6 +1,7 @@
 import requests
 from email.parser import BytesParser
 from email.policy import compat32
+from urllib.parse import quote
 
 
 class InjectError(Exception):
@@ -36,7 +37,7 @@ def message_exists(cfg, token, message_id):
     try:
         r = requests.post(cfg.soap_url,
                           json={"Header": header, "Body": body},
-                          verify=cfg.verify_tls, timeout=30)
+                          verify=cfg.tls_verify(), timeout=30)
         data = r.json()
     except Exception:
         return False
@@ -49,14 +50,19 @@ def message_exists(cfg, token, message_id):
 
 
 def inject_eml(cfg, account, folder, token, eml_path):
-    url = "%s/home/%s/%s" % (cfg.rest_base, account, folder.strip("/"))
+    # Both account and folder are user-controlled (folder always; account when
+    # the requester is admin). Encode them so '?', '#', '%', or unicode in a
+    # folder name cannot rewrite the REST URL's query string or path.
+    url = "%s/home/%s/%s" % (cfg.rest_base,
+                             quote(account, safe="@."),
+                             quote(folder.strip("/"), safe="/"))
     with open(eml_path, "rb") as fh:
         data = fh.read()
     try:
         r = requests.post(url, params={"fmt": "eml"}, data=data,
                           cookies={"ZM_AUTH_TOKEN": token},
                           headers={"Content-Type": "message/rfc822"},
-                          verify=cfg.verify_tls, timeout=120)
+                          verify=cfg.tls_verify(), timeout=120)
     except requests.RequestException as exc:
         raise InjectError("network: %s" % exc) from exc
     if r.status_code >= 300:
@@ -64,12 +70,12 @@ def inject_eml(cfg, account, folder, token, eml_path):
 
 
 def inject_tgz(cfg, account, token, tgz_path):
-    url = "%s/home/%s/" % (cfg.rest_base, account)
+    url = "%s/home/%s/" % (cfg.rest_base, quote(account, safe="@."))
     try:
         with open(tgz_path, "rb") as fh:
             r = requests.post(url, params={"fmt": "tgz", "resolve": "skip"},
                               data=fh, cookies={"ZM_AUTH_TOKEN": token},
-                              verify=cfg.verify_tls, timeout=3600)
+                              verify=cfg.tls_verify(), timeout=3600)
     except requests.RequestException as exc:
         raise InjectError("network: %s" % exc) from exc
     if r.status_code >= 300:

@@ -25,11 +25,8 @@ def admin_token(cfg):
     body = {"AuthRequest": {"_jsns": "urn:zimbraAdmin",
                             "name": cfg.svc_name,
                             "password": cfg.svc_password}}
-    resp = _soap(cfg.admin_soap_url, body, cfg.verify_tls)
+    resp = _soap(cfg.admin_soap_url, body, cfg.tls_verify())
     return resp["AuthResponse"]["authToken"][0]["_content"]
-
-
-_admin_token = admin_token  # 兼容旧引用
 
 
 def delegate_token(cfg, target_account):
@@ -40,5 +37,5 @@ def delegate_token(cfg, target_account):
     body = {"DelegateAuthRequest": {
         "_jsns": "urn:zimbraAdmin",
         "account": {"by": "name", "_content": target_account}}}
-    resp = _soap(cfg.admin_soap_url, body, cfg.verify_tls, header=header)
+    resp = _soap(cfg.admin_soap_url, body, cfg.tls_verify(), header=header)
     return resp["DelegateAuthResponse"]["authToken"][0]["_content"]

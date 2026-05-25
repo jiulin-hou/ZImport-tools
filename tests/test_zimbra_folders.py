@@ -14,6 +14,10 @@ class _Cfg:
     soap_url = "https://h:8443/service/soap"
     verify_tls = False
 
+    @staticmethod
+    def tls_verify():
+        return False
+
 
 def _resp_ok(folders):
     """Build a fake GetFolderResponse with the given folder children

@@ -96,7 +96,7 @@ def validate(cfg, token, _cache=None):
     header = {"context": {"_jsns": "urn:zimbra",
                           "authToken": {"_content": token}}}
     try:
-        inner = _soap(cfg.soap_url, body, cfg.verify_tls, header=header)
+        inner = _soap(cfg.soap_url, body, cfg.tls_verify(), header=header)
     except requests.RequestException as exc:
         raise ZimbraUnreachable(str(exc))
     except AuthError:

@@ -13,6 +13,9 @@ class _Cfg:
     rest_base = "https://h:8443"
     verify_tls = False
 
+    def tls_verify(self):
+        return self.verify_tls
+
 
 @pytest.fixture
 def app(tmp_path):
@@ -335,3 +338,193 @@ def test_import_rejected_when_queue_full(app, patch_validate, monkeypatch):
         "folder": "Inbox",
     })
     assert resp.status_code == 429
+
+
+# ---- P0 security: get_task isolation, blanket CSRF, size guards ----
+
+def test_get_task_404_for_other_user(app, patch_validate, tmp_path):
+    """Authenticated user must not see tasks owned by other accounts."""
+    from zimport_tools.store import TaskStore
+    store = TaskStore(str(tmp_path / "t.db"))
+    td = tmp_path / "td"
+    td.mkdir()
+    other_task = store.create_task(account="other@d", requester="other@d",
+                                    target_folder="Inbox", temp_dir=str(td))
+    client = _logged_in(app, patch_validate)  # u@d, non-admin
+    resp = client.get("/api/tasks/" + other_task)
+    assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("method,path,kwargs", [
+    ("POST", "/api/upload/init",            {}),
+    ("POST", "/api/upload/chunk",
+        {"data": {"upload_id": "x"}, "content_type": "multipart/form-data"}),
+    ("POST", "/api/import",                 {"json": {}}),
+    ("POST", "/api/tasks/whatever/retry",   {}),
+    ("POST", "/api/_test_csrf",             {}),
+])
+def test_csrf_required_on_all_write_endpoints(app, patch_validate,
+                                              method, path, kwargs):
+    """Every state-changing endpoint must reject requests lacking
+    X-Zimport-CSRF, so a forgotten decorator on a new POST route is caught."""
+    client = _logged_in(app, patch_validate)
+    resp = client.open(path, method=method, **kwargs)
+    assert resp.status_code == 403, \
+        "%s %s should 403 without CSRF, got %s" % (method, path, resp.status_code)
+
+
+def test_import_413_when_payload_exceeds_max(app, patch_validate, monkeypatch):
+    """Reject before enqueueing if merged input exceeds cfg.max_task_bytes."""
+    client = _logged_in(app, patch_validate)
+    # Tiny limit so a 1-byte upload trips it.
+    monkeypatch.setattr(app, "_cfg_max_override", 0, raising=False)
+    # Replace cfg reference reachable via closure: monkeypatch the
+    # _queue_limit check is unrelated; we instead set via cfg attr.
+    # Easiest path: lower the configured max via fixture's cfg object.
+    cfg = client.application.view_functions["start_import"].__closure__
+    # cfg is captured in the create_app closure; expose via app extension.
+    # Simpler: monkeypatch shutil.disk_usage and set max_task_bytes via
+    # the cfg object stashed on app.
+    import zimport_tools.web as _web
+    original_max = None
+    for cell in cfg or []:
+        try:
+            obj = cell.cell_contents
+        except ValueError:
+            continue
+        if hasattr(obj, "max_task_bytes"):
+            original_max = obj.max_task_bytes
+            obj.max_task_bytes = 0
+            break
+    try:
+        upload_id = client.post("/api/upload/init",
+                                headers=_csrf()).get_json()["upload_id"]
+        client.post("/api/upload/chunk", headers=_csrf(), data={
+            "upload_id": upload_id, "file_index": "0", "chunk_index": "0",
+            "blob": (io.BytesIO(b"DATA"), "blob"),
+        }, content_type="multipart/form-data")
+        resp = client.post("/api/import", headers=_csrf(), json={
+            "upload_id": upload_id,
+            "files": [{"index": 0, "name": "m.eml", "chunks": 1}],
+            "folder": "Inbox",
+        })
+        assert resp.status_code == 413
+    finally:
+        if original_max is not None:
+            for cell in cfg or []:
+                try:
+                    obj = cell.cell_contents
+                except ValueError:
+                    continue
+                if hasattr(obj, "max_task_bytes"):
+                    obj.max_task_bytes = original_max
+                    break
+
+
+def test_import_507_when_disk_full(app, patch_validate, monkeypatch):
+    """Reject when local temp partition has less free space than the merged
+    input — protects against DoS-by-fill."""
+    client = _logged_in(app, patch_validate)
+    upload_id = client.post("/api/upload/init",
+                            headers=_csrf()).get_json()["upload_id"]
+    client.post("/api/upload/chunk", headers=_csrf(), data={
+        "upload_id": upload_id, "file_index": "0", "chunk_index": "0",
+        "blob": (io.BytesIO(b"DATA"), "blob"),
+    }, content_type="multipart/form-data")
+    # Pretend the disk has only 1 byte free.
+    fake_usage = type("U", (), {"free": 1, "total": 0, "used": 0})()
+    monkeypatch.setattr(web.shutil, "disk_usage", lambda p: fake_usage)
+    resp = client.post("/api/import", headers=_csrf(), json={
+        "upload_id": upload_id,
+        "files": [{"index": 0, "name": "m.eml", "chunks": 1}],
+        "folder": "Inbox",
+    })
+    assert resp.status_code == 507
+
+
+@pytest.mark.parametrize("folder", [
+    "../etc",            # path traversal segment
+    "Inbox/../../root",  # traversal mid-path
+    "Inbox?fmt=tgz",     # query string injection
+    "Inbox#frag",        # fragment injection
+    "Inbox%2F..",        # percent-encoded escape
+    "Inbox\nX-Header",   # CRLF injection
+    "",                  # empty after fallback => actually fallback to Inbox
+])
+def test_import_rejects_unsafe_folder(app, patch_validate, folder):
+    client = _logged_in(app, patch_validate)
+    upload_id = client.post("/api/upload/init",
+                            headers=_csrf()).get_json()["upload_id"]
+    client.post("/api/upload/chunk", headers=_csrf(), data={
+        "upload_id": upload_id, "file_index": "0", "chunk_index": "0",
+        "blob": (io.BytesIO(b"DATA"), "blob"),
+    }, content_type="multipart/form-data")
+    resp = client.post("/api/import", headers=_csrf(), json={
+        "upload_id": upload_id,
+        "files": [{"index": 0, "name": "m.eml", "chunks": 1}],
+        "folder": folder,
+    })
+    # Empty string falls back to "Inbox" in the handler, so that one is OK.
+    if folder == "":
+        assert resp.status_code == 200
+    else:
+        assert resp.status_code == 400, \
+            "folder %r should 400, got %s" % (folder, resp.status_code)
+
+
+def test_admin_can_target_other_account(app, patch_validate):
+    """Positive: admin specifying body.account routes task to that account."""
+    client = _logged_in(app, patch_validate,
+                        account="admin@d", is_admin=True)
+    upload_id = client.post("/api/upload/init",
+                            headers=_csrf()).get_json()["upload_id"]
+    client.post("/api/upload/chunk", headers=_csrf(), data={
+        "upload_id": upload_id, "file_index": "0", "chunk_index": "0",
+        "blob": (io.BytesIO(b"x"), "blob"),
+    }, content_type="multipart/form-data")
+    resp = client.post("/api/import", headers=_csrf(), json={
+        "upload_id": upload_id,
+        "files": [{"index": 0, "name": "m.eml", "chunks": 1}],
+        "folder": "Inbox",
+        "account": "victim@d",
+    })
+    task_id = resp.get_json()["task_id"]
+    task = client.get("/api/tasks/" + task_id).get_json()
+    assert task["account"] == "victim@d"
+    assert task["requester"] == "admin@d"
+
+
+def test_admin_retry_preserves_original_requester(app, patch_validate, tmp_path):
+    """Admin retrying someone else's failed task must keep the original
+    requester so the author still sees the new task in their /api/tasks."""
+    from zimport_tools.store import TaskStore
+    store = TaskStore(str(tmp_path / "t.db"))
+    td = tmp_path / "td"
+    td.mkdir()
+    old_id = store.create_task(account="bob@d", requester="bob@d",
+                                target_folder="Inbox", temp_dir=str(td))
+    store.set_status(old_id, "failed", error="boom")
+    admin = _logged_in(app, patch_validate, account="admin@d", is_admin=True)
+    resp = admin.post("/api/tasks/" + old_id + "/retry", headers=_csrf())
+    new_id = resp.get_json()["task_id"]
+    new = store.get_task(new_id)
+    assert new["requester"] == "bob@d"
+    assert new["account"] == "bob@d"
+
+
+def test_upload_chunk_400_when_index_missing_or_huge(app, patch_validate):
+    client = _logged_in(app, patch_validate)
+    upload_id = client.post("/api/upload/init",
+                            headers=_csrf()).get_json()["upload_id"]
+    # missing file_index
+    r = client.post("/api/upload/chunk", headers=_csrf(), data={
+        "upload_id": upload_id, "chunk_index": "0",
+        "blob": (io.BytesIO(b"x"), "blob"),
+    }, content_type="multipart/form-data")
+    assert r.status_code == 400
+    # huge chunk_index (above _MAX_INDEX)
+    r = client.post("/api/upload/chunk", headers=_csrf(), data={
+        "upload_id": upload_id, "file_index": "0", "chunk_index": "999999",
+        "blob": (io.BytesIO(b"x"), "blob"),
+    }, content_type="multipart/form-data")
+    assert r.status_code == 400

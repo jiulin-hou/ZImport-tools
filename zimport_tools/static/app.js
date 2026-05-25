@@ -4,6 +4,17 @@ let identity = null; // {account, is_admin}
 
 function $(id) { return document.getElementById(id); }
 
+// HTML-escape any string before injecting via innerHTML. Used wherever a value
+// originates from the user (filenames, Zimbra-returned error text, etc.).
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function showOnly(id) {
   for (const k of ["loading", "error", "main"]) {
     $(k).classList.toggle("hidden", k !== id);
@@ -147,12 +158,12 @@ async function refreshTasks() {
     const hasDetails = (skipped + failed) > 0;
     const tr = document.createElement("tr");
     tr.innerHTML =
-      `<td>${t.id.slice(0, 8)}</td><td>${t.account}</td>` +
-      `<td>${statusText(t.status)}</td>` +
-      `<td><div class="bar"><div style="width:${pct}%"></div></div>${t.done}/${t.total}</td>` +
-      `<td>${skipped}</td>` +
-      `<td>${failed}</td>` +
-      `<td>${hasDetails ? `<a href="#" data-tid="${t.id}" class="detail-link">详情</a>` : ""}</td>`;
+      `<td>${esc(t.id.slice(0, 8))}</td><td>${esc(t.account)}</td>` +
+      `<td>${esc(statusText(t.status))}</td>` +
+      `<td><div class="bar"><div style="width:${pct}%"></div></div>${esc(t.done)}/${esc(t.total)}</td>` +
+      `<td>${esc(skipped)}</td>` +
+      `<td>${esc(failed)}</td>` +
+      `<td>${hasDetails ? `<a href="#" data-tid="${esc(t.id)}" class="detail-link">详情</a>` : ""}</td>`;
     tbody.appendChild(tr);
   }
   tbody.querySelectorAll(".detail-link").forEach(a => {
@@ -186,17 +197,17 @@ async function showTaskDetail(tid) {
   const box = $("taskDetail");
   box.classList.remove("hidden");
   box.innerHTML =
-    `<h3>任务 ${t.id.slice(0, 8)} 详情 ` +
+    `<h3>任务 ${esc(t.id.slice(0, 8))} 详情 ` +
     `<button id="closeDetail">关闭</button></h3>` +
     (skipped.length
-      ? `<p><b>跳过 ${skipped.length} 个(已存在的重复邮件)</b></p>` +
+      ? `<p><b>跳过 ${esc(skipped.length)} 个(已存在的重复邮件)</b></p>` +
         `<ul>${skipped.map(f =>
-          `<li>${f.name} — ${reasonText(f.reason)}</li>`).join("")}</ul>`
+          `<li>${esc(f.name)} — ${esc(reasonText(f.reason))}</li>`).join("")}</ul>`
       : "") +
     (failed.length
-      ? `<p class="err"><b>失败 ${failed.length} 个</b></p>` +
+      ? `<p class="err"><b>失败 ${esc(failed.length)} 个</b></p>` +
         `<ul>${failed.map(f =>
-          `<li>${f.name} — ${f.reason}</li>`).join("")}</ul>`
+          `<li>${esc(f.name)} — ${esc(f.reason)}</li>`).join("")}</ul>`
       : "") +
     (!skipped.length && !failed.length ? "<p>无详情</p>" : "");
   $("closeDetail").onclick = () => box.classList.add("hidden");

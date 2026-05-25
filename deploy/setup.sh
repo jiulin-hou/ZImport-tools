@@ -165,7 +165,14 @@ if "$ZIMBRA_HOST":
     cp["zimbra"]["soap_url"] = "https://$ZIMBRA_HOST:8443/service/soap"
     cp["zimbra"]["admin_soap_url"] = "https://$ZIMBRA_HOST:7071/service/admin/soap"
     cp["zimbra"]["rest_base"] = "https://$ZIMBRA_HOST:8443"
-    cp["zimbra"]["verify_tls"] = "false"  # Zimbra 自签证书的默认场景
+    # Trust Zimbra's own self-signed CA instead of disabling TLS verify
+    # entirely — the CA file is readable to root.
+    import os as _os
+    if _os.path.exists("/opt/zimbra/conf/ca/ca.pem"):
+        cp["zimbra"]["verify_tls"] = "true"
+        cp["zimbra"]["ca_bundle"] = "/opt/zimbra/conf/ca/ca.pem"
+    else:
+        cp["zimbra"]["verify_tls"] = "false"
 cp["service_account"]["name"] = "$SVC_NAME_DEFAULT"
 cp["service_account"]["password"] = "$SVC_PASS"
 with open("$ETC_DIR/config.ini", "w") as f:

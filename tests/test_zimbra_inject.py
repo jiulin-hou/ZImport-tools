@@ -7,6 +7,10 @@ class _Cfg:
     soap_url = "https://h:8443/service/soap"
     verify_tls = False
 
+    @staticmethod
+    def tls_verify():
+        return False
+
 
 class _Resp:
     def __init__(self, status):
