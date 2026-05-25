@@ -49,24 +49,63 @@ def _walk(node, paths):
         _walk(child, paths)
 
 
-def create_folder(cfg, account_token, path):
-    """Create a message folder at `path` (forward-slash separated, no leading
-    slash). Idempotent: if the folder already exists Zimbra returns success.
-    Raises FolderError on Zimbra fault."""
+def _soap(cfg, account_token, request_name, request_body, ns="urn:zimbraMail"):
     header = {"context": {"_jsns": "urn:zimbra",
                           "authToken": {"_content": account_token}}}
-    body = {"CreateFolderRequest": {
-        "_jsns": "urn:zimbraMail",
-        "folder": {
-            "name": path.strip("/"),
-            "l": "1",        # parent = root (Zimbra resolves '/' in name)
-            "view": "message",
-            "fie": "1",      # fetchIfExists - no fault if it already exists
-        }}}
+    body = {request_name: dict(request_body, _jsns=ns)}
     r = requests.post(cfg.soap_url,
                       json={"Header": header, "Body": body},
                       verify=cfg.tls_verify(), timeout=30)
     data = r.json()
     inner = data.get("Body", {})
     if "Fault" in inner:
-        raise FolderError(inner["Fault"]["Reason"]["Text"])
+        raise FolderError(inner["Fault"].get("Reason", {})
+                          .get("Text", "Zimbra fault"))
+    return inner
+
+
+def _get_folder_by_path(cfg, account_token, abs_path):
+    """Return the folder dict for an absolute path like '/Inbox/2024', or
+    None if Zimbra reports no such folder. Other faults are re-raised."""
+    try:
+        inner = _soap(cfg, account_token, "GetFolderRequest",
+                      {"folder": {"path": abs_path}})
+    except FolderError as exc:
+        msg = str(exc).lower()
+        # Zimbra returns "no such folder path: ..." when the folder doesn't
+        # exist; we want to interpret that as None, not as an error.
+        if "no such folder" in msg or "path does not exist" in msg:
+            return None
+        raise
+    return inner.get("GetFolderResponse", {}).get("folder", [{}])[0] or None
+
+
+def create_folder(cfg, account_token, path):
+    """Create a message folder at `path` (forward-slash separated, with or
+    without a leading slash, e.g. 'Inbox/2024' or '/Inbox/2024').
+
+    Zimbra's CreateFolderRequest rejects names containing '/', so this
+    walks the path segment by segment: for each missing intermediate it
+    issues a CreateFolderRequest with the correct numeric parent id.
+    Idempotent — already-existing segments are left alone."""
+    segments = [s for s in path.strip("/").split("/") if s]
+    if not segments:
+        raise FolderError("文件夹路径为空")
+
+    parent_id = "1"  # root
+    cur_path = ""
+    for seg in segments:
+        cur_path = cur_path + "/" + seg
+        existing = _get_folder_by_path(cfg, account_token, cur_path)
+        if existing:
+            parent_id = str(existing["id"])
+            continue
+        # Create this segment under parent_id.
+        inner = _soap(cfg, account_token, "CreateFolderRequest", {
+            "folder": {"name": seg, "l": parent_id,
+                       "view": "message", "fie": "1"}
+        })
+        created = inner.get("CreateFolderResponse", {}).get("folder", [{}])[0]
+        if not created:
+            raise FolderError("创建失败:无返回 folder 信息")
+        parent_id = str(created["id"])
