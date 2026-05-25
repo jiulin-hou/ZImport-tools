@@ -6,6 +6,59 @@
 2. 运行 `bash deploy/release.sh X.Y.Z` —— 自动跑测试、写版本号、提交、
    打 tag、推送 main 与 tag、生成 `dist/zimport-tools-X.Y.Z.tar.gz`
 
+## v1.2.3 — 2026-05-25
+
+完整一轮代码 review + 安全审计 + 测试覆盖评估发现的问题修复。
+测试数量 79 → 101。
+
+**安全(必修)**
+
+- **修真实 XSS**:任务表 / 任务详情之前用 `innerHTML` 拼接
+  `t.account`、`f.name`(用户上传文件名)、`f.reason`(可能包含
+  Zimbra 服务器返回的错误文本)。管理员可上传文件名为
+  `<img src=x onerror=...>` 的 eml,任务失败后任何打开"详情"的人
+  即执行任意脚本。`static/app.js` 加 `esc()` 包所有 innerHTML 插值。
+- **修 REST URL 注入**:`zimbra_inject.py` 之前用 `"%s/home/%s/%s"`
+  直接拼 `account`/`folder` 到 Zimbra REST URL。`folder` 普通用户
+  可控,若提交 `Inbox?fmt=tgz&query=in:Spam` 可改变请求语义。改用
+  `urllib.parse.quote`,并在 web 层 `_safe_folder()` 拒绝 `..`、
+  `?`、`#`、`%`、控制字符、超长字符串。
+- **TLS 校验替代 verify_tls=false**:新增 `[zimbra] ca_bundle`
+  字段;`Config.tls_verify()` 优先返回 CA bundle 路径而非布尔。
+  `setup.sh` 探测同机 Zimbra 时自动填
+  `ca_bundle = /opt/zimbra/conf/ca/ca.pem` + `verify_tls = true`,
+  使 svc_password 等敏感请求有真正的 CA 链验证而不是裸 TLS。
+
+**鲁棒性(P1)**
+
+- `web.py` 参数缺失/坏值返回 400 而非 500:`upload_chunk` /
+  `upload_status` / `start_import` 全部改用 `.get()` + `_bounded_int()`
+  解析,无效输入(缺字段、非数字、超出 `[0, 10000)`)统一 400。
+- `start_import` 增加 folder 字符白名单校验(见上 URL 注入修复)。
+- `worker.process_task` 顶层 `except Exception` 补完整注释说明
+  为什么需要 catch-all(避免一封 eml 的解析错把整个 worker 进程
+  搞死,后续任务永远卡在 running)。
+- 管理员重试他人失败任务时 **保留原任务的 `requester`**,原作者
+  仍能在 `/api/tasks` 看到新任务,授权语义对齐。
+- 删 `zimbra_auth._admin_token` 死代码别名(无人调用)。
+
+**测试覆盖(P0 + P1)**
+
+- 新增 `get_task` 越权测试(任何登录用户拿别人 task_id 必 404)。
+- 新增 **CSRF 参数化测试**:`/api/upload/init` `/api/upload/chunk`
+  `/api/import` `/api/tasks/<id>/retry` `/api/_test_csrf` 全部断言
+  "缺 X-Zimport-CSRF → 403"。任何人新加 POST 端点忘装 `login_required`
+  会立刻被抓住。
+- 新增 `start_import` 413(超出 `max_task_bytes`) / 507(磁盘剩余
+  不足)测试。
+- 新增 7 个 folder 注入 case 的参数化拒收测试。
+- 新增 admin 正向测试:`body.account` 真的能路由到指定账户,且
+  retry 保留原 requester。
+- 新增 `upload_chunk` 缺字段 / 超大 index 返回 400 测试。
+- 新增 worker tgz inject 失败路径 + retry 残留 work 自动清理测试。
+- 新增 `store.purge_old` 不删 queued/running 安全闸口测试。
+- 新增 archive 大小写 `.EML` / `.Eml` 识别测试。
+
 ## v1.2.2 — 2026-05-25
 
 收拾 v1.2.1 审计时归到"非 bug 但可改"的几项小事。
