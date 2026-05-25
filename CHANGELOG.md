@@ -6,6 +6,43 @@
 2. 运行 `bash deploy/release.sh X.Y.Z` —— 自动跑测试、写版本号、提交、
    打 tag、推送 main 与 tag、生成 `dist/zimport-tools-X.Y.Z.tar.gz`
 
+## v1.3.2 — 2026-05-25
+
+让 dedupe 的两个"漏判静默"场景对用户可见。
+
+**新增 failure code(WARNING 类,邮件仍入箱)**
+
+- `no_message_id` — eml 没有 Message-ID 头(古早邮件、自家程序拼的、
+  解析失败的 .eml 都会落到这里)。本来 worker 直接 inject 不做去重也
+  不提示,用户无从感知"这封邮件每次重导都会重复入箱"。现在 inject
+  照旧但 failures 数组里加一条 warning,前端任务详情区单独成块。
+- `dedupe_check_failed` — Zimbra SOAP 查询失败(网络抖动、Zimbra
+  Fault)。原本 `message_exists` 异常静默 → 返回 False → 邮件被当
+  "不存在"再次 inject。现在 `batch_existing_message_ids` 返回
+  `(existing, undecidable)` tuple,worker 把 undecidable 邮件标
+  warning 入箱,提示用户"判重出错,已直接导入,建议手工确认"。
+
+**ABI**
+
+- `zimbra_inject.batch_existing_message_ids` 返回值由 `set` 改 `tuple`
+  `(existing, undecidable)`。`message_exists` 行为保持不变(异常仍
+  吞为 False);新内部 `_check_one` 区分"不存在"vs"查询失败",抛
+  `DedupeCheckError`。
+- worker 之外的调用方不变。
+
+**前端**
+
+- 任务详情区分 **跳过 / 提醒 / 失败** 三段(原本只有跳过 + 失败,
+  warning 误归到失败误导用户)。
+- "只重试失败"按钮现在不再把 warning 当成需重试 —— 那些邮件已经
+  入箱了,重试只会造成真正的重复。
+
+**回归测试(+3)**
+
+- `test_batch_existing_returns_undecidable_on_soap_error`
+- `test_process_task_no_message_id_inject_with_warning`
+- `test_process_task_dedupe_check_failed_inject_with_warning`
+
 ## v1.3.1 — 2026-05-25
 
 **修一个 v1.3.0 用户上报的真实 dedupe bug**
