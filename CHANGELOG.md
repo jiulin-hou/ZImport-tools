@@ -6,6 +6,20 @@
 2. 运行 `bash deploy/release.sh X.Y.Z` —— 自动跑测试、写版本号、提交、
    打 tag、推送 main 与 tag、生成 `dist/zimport-tools-X.Y.Z.tar.gz`
 
+## v1.2.1 — 2026-05-25
+
+清理 v1.2.0 改完后留在仓库里的几处死代码 / 误导注释。
+
+- **删 `cfg.chunk_size`**:配置字段没有任何代码消费 —— 前端 `app.js`
+  把分片大小写死成 10MB,后端 `uploads.save_chunk` 不需要这个值。
+  同步从 `config.example.ini` 和测试 fixture / `test_config.py` 删除。
+- **删 `zimbra_session.token_hash`**:v1.2.0 把 Flask session 删掉后,
+  这个用来防 session 串号的 SHA256 helper 没人调用了,连同 `hashlib`
+  import 一并清掉。
+- **清 `config.py` 误导注释**:之前注释写"保留 secret_key 字段读取
+  兼容旧 config.ini",但代码根本没读 —— 旧 config.ini 里有这字段也
+  不会出错(被忽略),所谓"兼容"是空话。直接删注释。
+
 ## v1.2.0 — 2026-05-25
 
 聚焦把项目精简为「纯 Zimbra 工具组件」单一形态,去掉所有"独立机器
