@@ -87,3 +87,48 @@ def test_fault(monkeypatch):
     monkeypatch.setattr(zimbra_auth.requests, "post", fake_post)
     with pytest.raises(zimbra_search.SearchError):
         zimbra_search.search_accounts(_Cfg, "ali")
+
+
+# ---- list_accounts ----
+
+def test_list_accounts_returns_sorted_and_filters_system(monkeypatch):
+    def fake_post(url, **kw):
+        body = kw["json"]["Body"]
+        if "AuthRequest" in body:
+            return _Resp({"Body": {"AuthResponse": {
+                "authToken": [{"_content": "T"}]}}})
+        return _Resp({"Body": {"SearchDirectoryResponse": {"account": [
+            {"name": "bob@d", "a": [{"n": "displayName", "_content": "Bob"}]},
+            {"name": "alice@d", "a": [{"n": "displayName", "_content": "Alice"}]},
+            # 系统账户应被过滤掉
+            {"name": "galsync.xyz@d", "a": []},
+            {"name": "spam.x@d", "a": []},
+            {"name": "ham.y@d", "a": []},
+            {"name": "virus-quarantine.x@d", "a": []},
+        ]}}})
+
+    monkeypatch.setattr(zimbra_search.requests, "post", fake_post)
+    monkeypatch.setattr(zimbra_auth.requests, "post", fake_post)
+    out = zimbra_search.list_accounts(_Cfg)
+    # 排过序、过滤了系统账户
+    assert [a["name"] for a in out] == ["alice@d", "bob@d"]
+    assert out[0]["display"] == "Alice"
+
+
+def test_list_accounts_uses_correct_query(monkeypatch):
+    captured = {}
+
+    def fake_post(url, **kw):
+        body = kw["json"]["Body"]
+        if "AuthRequest" in body:
+            return _Resp({"Body": {"AuthResponse": {
+                "authToken": [{"_content": "T"}]}}})
+        captured["query"] = body["SearchDirectoryRequest"]["query"]
+        captured["types"] = body["SearchDirectoryRequest"]["types"]
+        return _Resp({"Body": {"SearchDirectoryResponse": {"account": []}}})
+
+    monkeypatch.setattr(zimbra_search.requests, "post", fake_post)
+    monkeypatch.setattr(zimbra_auth.requests, "post", fake_post)
+    zimbra_search.list_accounts(_Cfg)
+    assert captured["query"] == "(objectClass=zimbraAccount)"
+    assert captured["types"] == "accounts"

@@ -176,6 +176,22 @@ def test_admin_account_search_returns_results(app, patch_validate, monkeypatch):
     assert resp.get_json()["accounts"][0]["name"] == "a@d"
 
 
+def test_admin_account_list_requires_admin(app, patch_validate):
+    client = _logged_in(app, patch_validate)  # non-admin
+    assert client.get("/api/admin/accounts").status_code == 403
+
+
+def test_admin_account_list_returns_all(app, patch_validate, monkeypatch):
+    monkeypatch.setattr(web.zimbra_search, "list_accounts",
+                        lambda cfg: [{"name": "a@d", "display": "A"},
+                                     {"name": "b@d", "display": "B"}])
+    client = _logged_in(app, patch_validate, account="admin@d", is_admin=True)
+    resp = client.get("/api/admin/accounts")
+    assert resp.status_code == 200
+    accs = resp.get_json()["accounts"]
+    assert [a["name"] for a in accs] == ["a@d", "b@d"]
+
+
 # ---- /api/tasks/<id>/retry ----
 
 def test_retry_creates_new_task_for_failed(app, patch_validate, tmp_path):

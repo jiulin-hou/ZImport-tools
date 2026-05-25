@@ -287,6 +287,18 @@ def create_app(cfg):
         except zimbra_search.SearchError as exc:
             return jsonify({"error": str(exc)}), 502
 
+    @app.route("/api/admin/accounts")
+    @login_required
+    def admin_account_list():
+        """列出所有账户(给目标账户下拉用)。仅管理员可用。"""
+        if not g.is_admin:
+            return jsonify({"error": "仅管理员可用"}), 403
+        try:
+            results = zimbra_search.list_accounts(cfg)
+            return jsonify({"accounts": results})
+        except zimbra_search.SearchError as exc:
+            return jsonify({"error": str(exc)}), 502
+
     # --- uploads -------------------------------------------------------
 
     @app.route("/api/upload/init", methods=["POST"])

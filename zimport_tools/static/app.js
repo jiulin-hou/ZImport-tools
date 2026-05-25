@@ -68,6 +68,7 @@ async function probeSession() {
   identity = await r.json();
   $("who").textContent = identity.account;
   $("adminBox").classList.toggle("hidden", !identity.is_admin);
+  if (identity.is_admin) await loadAdminAccountOptions();
   await loadFolders();
   showOnly("main");
   refreshTasks();
@@ -101,30 +102,24 @@ async function loadFolders() {
 
 $("targetAccount").addEventListener("change", loadFolders);
 
-// ------- 管理员目标账户 autocomplete -------
-// 输入 2+ 字符触发 SearchDirectoryRequest;debounce 250ms 防止打字时刷请求。
-let _acctSearchTimer = null;
-$("targetAccount").addEventListener("input", () => {
-  if (!session || !session.is_admin) return;  // 非管理员不搜
-  if (_acctSearchTimer) clearTimeout(_acctSearchTimer);
-  _acctSearchTimer = setTimeout(searchAdminAccounts, 250);
-});
-
-async function searchAdminAccounts() {
-  const q = $("targetAccount").value.trim();
-  const dl = $("accountList");
-  if (q.length < 2) { dl.innerHTML = ""; return; }
+// ------- 管理员目标账户下拉 -------
+// 管理员登录时一次性拉所有账户填充 <select>;39 个账户的小组织扁平
+// 下拉就够用,以后真上千账户再考虑虚拟滚动。
+async function loadAdminAccountOptions() {
+  const sel = $("targetAccount");
+  // 保留第一个 "(导入到自己)" 占位项
+  while (sel.options.length > 1) sel.remove(1);
   try {
-    const r = await apiFetch("api/admin/accounts/search?q=" +
-                              encodeURIComponent(q));
+    const r = await apiFetch("api/admin/accounts");
     if (!r.ok) return;
     const data = await r.json();
-    dl.innerHTML = "";
     for (const acc of data.accounts || []) {
       const opt = document.createElement("option");
       opt.value = acc.name;
-      if (acc.display) opt.label = acc.display + " — " + acc.name;
-      dl.appendChild(opt);
+      opt.textContent = acc.display
+        ? acc.display + " — " + acc.name
+        : acc.name;
+      sel.appendChild(opt);
     }
   } catch (e) { /* apiFetch 已处理 401 等 */ }
 }
