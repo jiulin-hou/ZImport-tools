@@ -47,65 +47,42 @@ cookie,必须同源。
 
 ## 部署
 
-### 1. 获取代码
+### 一键(推荐)
+
+在 Zimbra 同机上,以 root 身份:
 
 ```bash
+# 1. 拿代码(选一个)
 git clone https://github.com/jiulin-hou/ZImport-tools.git
 cd ZImport-tools
+#   或下载指定版本:
+#   curl -LO https://github.com/jiulin-hou/ZImport-tools/releases/download/v1.4.2/zimport-tools-1.4.2.tar.gz
+#   tar xf zimport-tools-1.4.2.tar.gz && cd zimport-tools
+
+# 2. 一条命令完成所有步骤
+sudo bash deploy/install.sh
 ```
 
-或下载指定版本:
+`install.sh` 串起 4 个阶段(`setup.sh` + systemd + `setup-proxy.sh`
++ zimlet 部署),其中 zimlet 还会强制启用 + 刷 Zimbra cache。完成
+后告诉用户**注销 Zimbra Web 重新登录**就能看到「数据导入」。
+
+### 分步(排错或自定义)
+
+`install.sh` 失败时可以逐步排查。每一步都幂等可重跑:
 
 ```bash
-curl -LO https://github.com/jiulin-hou/ZImport-tools/archive/refs/tags/v1.2.0.tar.gz
-tar xf v1.2.0.tar.gz && cd ZImport-tools-1.2.0
-```
-
-### 2. 一键环境准备
-
-```bash
-sudo bash deploy/setup.sh
-```
-
-做的事:建系统用户/目录 → 装编译依赖 → 编译 Python 3.11(已装就跳过)
-→ 建 venv 装依赖 → 生成 `/etc/zimport-tools/config.ini` →
-自动 `zmprov ca` 创建服务账号 `importsvc@<domain>`(已存在则
-`zmprov sp` 同步密码)→ 自检模块导入。
-
-### 3. 启动 systemd 服务
-
-```bash
-sudo cp /opt/zimport-tools/deploy/zimport-tools-{web,worker}.service \
-        /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now zimport-tools-web zimport-tools-worker
-```
-
-### 4. 配 Zimbra 主 nginx 反代
-
-```bash
-sudo bash /opt/zimport-tools/deploy/setup-proxy.sh
-```
-
-在 `nginx.conf.web.https.default.template` 的主 443 server 块末尾
-注入 `location ^~ /zimport-tools/` 反代到 `127.0.0.1:8088`,然后
-`zmproxyctl restart`。Zimbra 升级覆盖 template 时重跑此脚本即可。
-
-### 5. 部署 Zimlet
-
-```bash
-cd /opt/zimport-tools/zimlet && bash build.sh
-sudo chown zimbra:zimbra com_msauto_zimport_tools.zip
-sudo cp com_msauto_zimport_tools.zip /tmp/
+sudo bash deploy/setup.sh        # 阶段 1:环境 + venv + config + Zimbra 服务账号
+sudo cp deploy/zimport-tools-{web,worker}.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now zimport-tools-{web,worker}
+sudo bash deploy/setup-proxy.sh  # 阶段 3:Zimbra 主 nginx 加 /zimport-tools/ 反代
+bash zimlet/build.sh             # 阶段 4:打 zimlet zip
+sudo chown zimbra:zimbra zimlet/com_msauto_zimport_tools.zip
+sudo cp zimlet/com_msauto_zimport_tools.zip /tmp/
 sudo su - zimbra -c "zmzimletctl deploy /tmp/com_msauto_zimport_tools.zip"
-# 强制在 default COS 默认启用
-sudo su - zimbra -c "zmprov mc default \
-    +zimbraZimletAvailableZimlets '!com_msauto_zimport_tools'"
+sudo su - zimbra -c "zmprov mc default +zimbraZimletAvailableZimlets '!com_msauto_zimport_tools'"
 sudo su - zimbra -c "zmprov fc -a zimlet"
 ```
-
-用户**注销 Zimbra Web 重登**(zimlet 列表只在登录时拉一次),左下角
-Zimlets 面板出现「数据导入」。
 
 ## 使用
 

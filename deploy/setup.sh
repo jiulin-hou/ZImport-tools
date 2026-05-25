@@ -203,28 +203,6 @@ log "自检:导入应用模块"
   -c "import zimport_tools.web, zimport_tools.worker, zimport_tools.zimbra_folders, zimport_tools.zimbra_search; print('  模块导入 OK')" )
 
 log "环境准备完成。"
-cat <<EOF
-
-================================================================
-下一步:
-
-  1. 安装并启动服务:
-       cp $APP_DIR/deploy/zimport-tools-web.service $APP_DIR/deploy/zimport-tools-worker.service \\
-          /etc/systemd/system/
-       systemctl daemon-reload
-       systemctl enable --now zimport-tools-web zimport-tools-worker
-
-  2. 配 Zimbra 主 nginx 反向代理:
-       bash $APP_DIR/deploy/setup-proxy.sh
-     (在主 443 server 块加 location /zimport-tools/ → 127.0.0.1:8088)
-
-  3. 部署 Zimlet:
-       cd $APP_DIR/zimlet && bash build.sh
-       chown zimbra:zimbra com_msauto_zimport_tools.zip
-       cp com_msauto_zimport_tools.zip /tmp/
-       su - zimbra -c 'zmzimletctl deploy /tmp/com_msauto_zimport_tools.zip'
-
-  4. 用户 Zimbra Web 注销重登 → 左下角 Zimlets 面板「数据导入」
-     或直接访问 https://<zimbra-host>/zimport-tools/
-================================================================
-EOF
+echo
+echo "  这是 install.sh 的第一阶段。后续还需要装 systemd + 配 nginx + 部署 zimlet。"
+echo "  完整一键流程:bash $SCRIPT_DIR/install.sh"
