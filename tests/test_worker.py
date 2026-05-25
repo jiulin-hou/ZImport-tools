@@ -76,7 +76,7 @@ def test_process_task_dedup_within_batch(tmp_path, monkeypatch):
     monkeypatch.setattr(worker.zimbra_inject, "read_message_id",
                         lambda p: "<dup@x>")  # 所有 eml 同 id
     monkeypatch.setattr(worker.zimbra_inject, "batch_existing_message_ids",
-                        lambda cfg, tok, mids: set())  # 邮箱里没
+                        lambda cfg, tok, mids: (set(), set()))  # 邮箱里没
     injected = []
     monkeypatch.setattr(worker.zimbra_inject, "inject_eml",
                         lambda cfg, a, f, t, p: injected.append(p))
@@ -104,7 +104,7 @@ def test_process_task_dedup_against_mailbox(tmp_path, monkeypatch):
     monkeypatch.setattr(worker.zimbra_inject, "read_message_id",
                         lambda p: "<x@y>")
     monkeypatch.setattr(worker.zimbra_inject, "batch_existing_message_ids",
-                        lambda cfg, tok, mids: set(mids))  # all exist
+                        lambda cfg, tok, mids: (set(mids), set()))  # all exist
     monkeypatch.setattr(worker.zimbra_inject, "inject_eml",
                         lambda *a, **kw: pytest.fail("不应触发 inject"))
 
@@ -253,7 +253,7 @@ def test_process_task_dry_run_marks_existing_as_skipped(tmp_path, monkeypatch):
     monkeypatch.setattr(worker.zimbra_inject, "read_message_id",
                         lambda p: "<already@there>")
     monkeypatch.setattr(worker.zimbra_inject, "batch_existing_message_ids",
-                        lambda cfg, tok, mids: set(mids))
+                        lambda cfg, tok, mids: (set(mids), set()))
     monkeypatch.setattr(worker.zimbra_inject, "inject_eml",
                         lambda *a, **kw: pytest.fail("dry-run must not inject"))
 
@@ -262,3 +262,70 @@ def test_process_task_dry_run_marks_existing_as_skipped(tmp_path, monkeypatch):
     assert result["status"] == "done"
     assert result["skipped"] == 1, "邮箱里已有,dry-run 应该 skipped=1"
     assert result["done"] == 0
+
+
+def test_process_task_no_message_id_inject_with_warning(tmp_path, monkeypatch):
+    """A1: emails without a Message-ID get imported (we have to — can't
+    dedupe them) but a 'no_message_id' warning is appended to failures so
+    the user knows. Counts: done += 1, skipped/failed unchanged."""
+    store = TaskStore(str(tmp_path / "wnoid.db"))
+    temp_dir = tmp_path / "task_noid"
+    (temp_dir / "input").mkdir(parents=True)
+    (temp_dir / "input" / "anon.eml").write_bytes(b"a")
+    tid = store.create_task("u@d", "u@d", "Inbox", str(temp_dir))
+    task = store.claim_next()
+
+    monkeypatch.setattr(worker.zimbra_auth, "delegate_token",
+                        lambda cfg, a: "TOK")
+    monkeypatch.setattr(worker.zimbra_inject, "read_message_id",
+                        lambda p: "")  # no Message-ID
+    monkeypatch.setattr(worker.zimbra_inject, "batch_existing_message_ids",
+                        lambda cfg, tok, mids: (set(), set()))
+    injected = []
+    monkeypatch.setattr(worker.zimbra_inject, "inject_eml",
+                        lambda cfg, a, f, t, p: injected.append(p))
+
+    worker.process_task(_CfgDedupe, store, task)
+    result = store.get_task(tid)
+    assert result["status"] == "done"
+    assert result["done"] == 1, "邮件还是入箱了"
+    assert result["skipped"] == 0
+    assert result["failed"] == 0
+    assert len(injected) == 1
+    import json
+    failures = json.loads(result["failures"])
+    assert len(failures) == 1
+    assert failures[0]["code"] == "no_message_id"
+
+
+def test_process_task_dedupe_check_failed_inject_with_warning(tmp_path,
+                                                              monkeypatch):
+    """C1: when dedupe lookup itself errors out for a message, we still
+    inject (better than silently dropping mail), but tag it 'dedupe_check_failed'
+    so the user can audit."""
+    from zimport_tools import zimbra_inject
+    store = TaskStore(str(tmp_path / "wfailcheck.db"))
+    temp_dir = tmp_path / "task_failcheck"
+    (temp_dir / "input").mkdir(parents=True)
+    (temp_dir / "input" / "a.eml").write_bytes(b"a")
+    tid = store.create_task("u@d", "u@d", "Inbox", str(temp_dir))
+    task = store.claim_next()
+
+    monkeypatch.setattr(worker.zimbra_auth, "delegate_token",
+                        lambda cfg, a: "TOK")
+    monkeypatch.setattr(worker.zimbra_inject, "read_message_id",
+                        lambda p: "<m@x>")
+    monkeypatch.setattr(worker.zimbra_inject, "batch_existing_message_ids",
+                        lambda cfg, tok, mids: (set(), {"<m@x>"}))
+    injected = []
+    monkeypatch.setattr(worker.zimbra_inject, "inject_eml",
+                        lambda cfg, a, f, t, p: injected.append(p))
+
+    worker.process_task(_CfgDedupe, store, task)
+    result = store.get_task(tid)
+    assert result["status"] == "done"
+    assert result["done"] == 1
+    import json
+    failures = json.loads(result["failures"])
+    assert len(failures) == 1
+    assert failures[0]["code"] == "dedupe_check_failed"

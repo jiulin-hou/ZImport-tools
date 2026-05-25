@@ -418,6 +418,8 @@ async function doRetry(tid, onlyFailed) {
 const REASON_BY_CODE = {
   duplicate_batch: "重复(本批内同 Message-ID)",
   duplicate_mailbox: "重复(邮箱内已存在)",
+  no_message_id: "缺 Message-ID 头,无法判重已直接导入",
+  dedupe_check_failed: "判重查询出错,已直接导入,建议手工确认",
   network: "网络异常,请检查 Zimbra 是否可达",
   transient: "Zimbra 临时错误,已自动重试",
   quota: "目标邮箱配额已满",
@@ -426,8 +428,13 @@ const REASON_BY_CODE = {
   unknown: "未知错误",
 };
 
-function isDuplicate(f) {
-  return String(f.code || "").startsWith("duplicate");
+const WARNING_CODES = new Set(["no_message_id", "dedupe_check_failed"]);
+
+function classifyEntry(f) {
+  const code = String(f.code || "");
+  if (code.startsWith("duplicate")) return "duplicate";
+  if (WARNING_CODES.has(code)) return "warning";
+  return "failure";
 }
 
 async function showTaskDetail(tid) {
@@ -440,17 +447,33 @@ async function showTaskDetail(tid) {
   }
   failures = failures || [];
 
-  // Group: duplicates vs real failures, then by code within failures.
-  const dupes = failures.filter(isDuplicate);
-  const fails = failures.filter(f => !isDuplicate(f));
-  const byCode = {};
-  for (const f of fails) {
-    const code = f.code || "unknown";
-    (byCode[code] = byCode[code] || []).push(f);
-  }
+  // Group into duplicates / warnings / failures, then by code within each.
+  const dupes = failures.filter(f => classifyEntry(f) === "duplicate");
+  const warns = failures.filter(f => classifyEntry(f) === "warning");
+  const fails = failures.filter(f => classifyEntry(f) === "failure");
+
+  const groupByCode = (list) => {
+    const out = {};
+    for (const f of list) {
+      const code = f.code || "unknown";
+      (out[code] = out[code] || []).push(f);
+    }
+    return out;
+  };
 
   const renderRow = (f) =>
     `<li>${esc(f.name)} — ${esc(f.reason || REASON_BY_CODE[f.code] || "未知")}</li>`;
+
+  const renderSection = (title, klass, byCode) => {
+    const parts = [];
+    for (const code of Object.keys(byCode)) {
+      const list = byCode[code];
+      const head = REASON_BY_CODE[code] || code;
+      parts.push(`<p class="${klass}"><b>${esc(head)} — ${list.length} 个</b></p>`);
+      parts.push(`<ul>${list.map(renderRow).join("")}</ul>`);
+    }
+    return parts.join("");
+  };
 
   const sections = [];
   sections.push(
@@ -466,13 +489,16 @@ async function showTaskDetail(tid) {
     sections.push(`<p><b>跳过 ${dupes.length} 个</b>(已存在的重复邮件)</p>`);
     sections.push(`<ul>${dupes.map(renderRow).join("")}</ul>`);
   }
-  for (const code of Object.keys(byCode)) {
-    const list = byCode[code];
-    const head = REASON_BY_CODE[code] || code;
-    sections.push(`<p class="err"><b>${esc(head)} — ${list.length} 个</b></p>`);
-    sections.push(`<ul>${list.map(renderRow).join("")}</ul>`);
+  if (warns.length) {
+    sections.push(`<p class="warn"><b>提醒 ${warns.length} 个</b>` +
+                  `(已导入但需注意,详情见下)</p>`);
+    sections.push(renderSection("提醒", "warn", groupByCode(warns)));
   }
-  if (!dupes.length && !fails.length) {
+  if (fails.length) {
+    sections.push(`<p class="err"><b>失败 ${fails.length} 个</b></p>`);
+    sections.push(renderSection("失败", "err", groupByCode(fails)));
+  }
+  if (!dupes.length && !warns.length && !fails.length) {
     sections.push("<p>无详情</p>");
   }
 

@@ -72,15 +72,20 @@ def process_task(cfg, store, task):
             failures = []
             seen_local = set()  # 同批内重复(同 Message-ID)
 
-            # Batch-check Zimbra mailbox for existing Message-IDs upfront
-            # so we avoid one SOAP round-trip per eml.
+            # Batch-check Zimbra mailbox for existing Message-IDs upfront so
+            # we avoid one SOAP round-trip per eml. The check itself can
+            # fail (network, Zimbra Fault); we keep those mids as
+            # "undecidable" and tag those messages in the failures log so
+            # the user knows their dedupe verdict is best-effort.
             mailbox_existing = set()
+            undecidable = set()
             if cfg.dedupe:
                 path_to_mid = {p: zimbra_inject.read_message_id(p)
                                for p in paths}
                 all_mids = [m for m in path_to_mid.values() if m]
-                mailbox_existing = zimbra_inject.batch_existing_message_ids(
-                    cfg, token, all_mids)
+                mailbox_existing, undecidable = (
+                    zimbra_inject.batch_existing_message_ids(
+                        cfg, token, all_mids))
             else:
                 path_to_mid = {}
 
@@ -93,7 +98,15 @@ def process_task(cfg, store, task):
                 try:
                     if cfg.dedupe:
                         mid = path_to_mid.get(path) or ""
-                        if mid:
+                        if not mid:
+                            # No Message-ID header → we cannot dedupe this
+                            # message. Inject it anyway but record a warning
+                            # so the user can spot the un-dedupable mail.
+                            failures.append({
+                                "name": name,
+                                "code": "no_message_id",
+                                "reason": "缺 Message-ID 头,无法判重已直接导入"})
+                        else:
                             if mid in seen_local:
                                 skipped += 1
                                 failures.append({"name": name,
@@ -113,6 +126,13 @@ def process_task(cfg, store, task):
                                                       failed=failed,
                                                       skipped=skipped)
                                 continue
+                            if mid in undecidable:
+                                # Dedupe lookup itself errored; inject but
+                                # warn so the user can audit afterwards.
+                                failures.append({
+                                    "name": name,
+                                    "code": "dedupe_check_failed",
+                                    "reason": "判重查询出错,已直接导入,建议在 Zimbra Web 中手工确认"})
                     if is_dry_run:
                         # Dry-run: every non-duplicate counts as "would import".
                         done += 1

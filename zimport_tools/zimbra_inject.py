@@ -21,6 +21,14 @@ class InjectError(Exception):
         super().__init__("%s: %s" % (code, message_zh))
 
 
+class DedupeCheckError(Exception):
+    """Raised by the internal mailbox-presence probe when the SOAP call
+    itself failed (network, Zimbra Fault) — i.e. we cannot tell whether
+    the message exists. The caller should treat the message as
+    "imported but unverified" and surface that to the user instead of
+    silently re-injecting."""
+
+
 _TRANSIENT_HTTP = {408, 429, 500, 502, 503, 504}
 _QUOTA_PAT = re.compile(r"QUOTA_EXCEEDED|MAILBOX_FULL|quota.*exceed", re.I)
 _PERMISSION_PAT = re.compile(
@@ -62,9 +70,10 @@ def read_message_id(eml_path):
         return ""
 
 
-def message_exists(cfg, token, message_id):
-    """以委托 token 调 SOAP SearchRequest,看该 Message-ID 是否已在邮箱内
-    任意位置存在。SOAP 失败一律视为"不存在"以免阻塞导入(返回 False)。"""
+def _check_one(cfg, token, message_id):
+    """Strict variant: returns True/False if the answer is known, raises
+    DedupeCheckError if the SOAP call itself fails or Zimbra returns a
+    Fault. Internal — `message_exists` wraps this for legacy callers."""
     if not message_id:
         return False
     # Zimbra 的操作符是 msgid:(不是 messageid:),且查询字符串里**不能**带
@@ -81,28 +90,52 @@ def message_exists(cfg, token, message_id):
                           json={"Header": header, "Body": body},
                           verify=cfg.tls_verify(), timeout=30)
         data = r.json()
-    except Exception:
-        return False
+    except Exception as exc:
+        raise DedupeCheckError(str(exc))
     inner = data.get("Body", {})
     if "Fault" in inner:
-        return False
+        reason = inner["Fault"].get("Reason", {}).get("Text", "Zimbra fault")
+        raise DedupeCheckError(reason)
     resp = inner.get("SearchResponse", {})
     hits = resp.get("m") or resp.get("hit") or []
     return len(hits) > 0
 
 
-def batch_existing_message_ids(cfg, token, message_ids):
-    """Return the set of message_ids that already exist in the mailbox.
+def message_exists(cfg, token, message_id):
+    """Legacy boolean variant: True if the message is in the mailbox,
+    False if not OR if the check itself failed. Prefer batch_existing_message_ids
+    when you also want to know about undecidable cases."""
+    try:
+        return _check_one(cfg, token, message_id)
+    except DedupeCheckError:
+        return False
 
-    Implementation note: Zimbra's SearchResponse hits do NOT include the
-    Message-ID header value (we verified against 8.8.15 — hits expose
-    cid/cm/d/e/f/fr/id/l/rev/s/sf/su but no Message-ID), so a true OR-batch
-    query can't be reverse-mapped to individual mids. Until that is solved
-    we fall back to one SearchRequest per Message-ID; on a local Zimbra
-    this is ~10ms each, so 1000 emails ≈ 10s of dedupe overhead, which is
-    acceptable. Performance fix is tracked separately."""
-    return {mid for mid in message_ids
-            if mid and message_exists(cfg, token, mid)}
+
+def batch_existing_message_ids(cfg, token, message_ids):
+    """Return `(existing, undecidable)`:
+
+    - `existing`: set of message_ids the mailbox already contains.
+    - `undecidable`: set of message_ids whose dedupe lookup itself failed
+      (network error, Zimbra Fault). Callers should treat these as
+      "we cannot tell" and surface to the user rather than silently
+      re-injecting.
+
+    Implementation: per-Message-ID SearchRequest. Zimbra 8.8.15
+    SearchResponse hits do NOT carry the Message-ID header value
+    (verified — hits expose cid/cm/d/e/f/fr/id/l/rev/s/sf/su but no mid),
+    so OR-batching can't be reverse-mapped. On a local Zimbra each lookup
+    is ~10ms, so 1000 emails ≈ 10s of dedupe overhead, acceptable."""
+    existing = set()
+    undecidable = set()
+    for mid in message_ids:
+        if not mid:
+            continue
+        try:
+            if _check_one(cfg, token, mid):
+                existing.add(mid)
+        except DedupeCheckError:
+            undecidable.add(mid)
+    return existing, undecidable
 
 
 def inject_eml(cfg, account, folder, token, eml_path):

@@ -166,11 +166,38 @@ def test_batch_existing_message_ids_returns_only_present(monkeypatch):
     """Regression for v1.3.0 bug: Zimbra SearchResponse hits don't carry
     Message-ID, so any batch implementation that relies on per-hit mid lookup
     silently returns empty -> dedupe goes dark and user re-imports duplicates.
-    The contract is: pass a list of mids, get back the subset that exist."""
+    The contract is: pass a list of mids, get back the subset that exist
+    (and an empty undecidable set when nothing errored)."""
     from zimport_tools import zimbra_inject
     existing = {"<a@x>", "<c@x>"}
-    monkeypatch.setattr(zimbra_inject, "message_exists",
+    monkeypatch.setattr(zimbra_inject, "_check_one",
                         lambda cfg, tok, mid: mid in existing)
-    result = zimbra_inject.batch_existing_message_ids(
+    result, undecidable = zimbra_inject.batch_existing_message_ids(
         _Cfg, "TOK", ["<a@x>", "<b@x>", "<c@x>", "", None])
     assert result == {"<a@x>", "<c@x>"}
+    assert undecidable == set()
+
+
+def test_batch_existing_returns_undecidable_on_soap_error(monkeypatch):
+    """SOAP error during dedupe check must surface in `undecidable` so the
+    caller can flag those messages instead of silently re-injecting."""
+    from zimport_tools import zimbra_inject
+
+    calls = []
+
+    def fake_check_one(cfg, tok, mid):
+        calls.append(mid)
+        if mid == "<exists@x>":
+            return True
+        if mid == "<missing@x>":
+            return False
+        raise zimbra_inject.DedupeCheckError("network down")
+
+    monkeypatch.setattr(zimbra_inject, "_check_one", fake_check_one)
+    existing, undecidable = zimbra_inject.batch_existing_message_ids(
+        _Cfg, "TOK",
+        ["<exists@x>", "<missing@x>", "<broken@x>", "", None])
+    assert existing == {"<exists@x>"}
+    assert undecidable == {"<broken@x>"}
+    # _check_one is not called for falsy mids
+    assert "" not in calls and None not in calls

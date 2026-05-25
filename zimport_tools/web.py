@@ -179,14 +179,20 @@ def create_app(cfg):
                 failures = json.loads(failures_raw)
             except (TypeError, ValueError):
                 failures = []
+            # Warnings (no_message_id / dedupe_check_failed) mean the message
+            # was already injected — only true failures (network / quota /
+            # permission / invalid / unknown / transient) need re-running.
+            _NOT_FAILURES = ("duplicate", "no_message_id",
+                             "dedupe_check_failed")
             keep_files = [
                 f["name"] for f in failures
                 if isinstance(f, dict)
                 and f.get("name")
-                and not str(f.get("code", "")).startswith("duplicate")
+                and not any(str(f.get("code", "")).startswith(p)
+                            for p in _NOT_FAILURES)
             ]
             if not keep_files:
-                return jsonify({"error": "没有非重复失败的文件可重试"}), 400
+                return jsonify({"error": "没有真正失败的文件可重试"}), 400
 
         # Keep the original requester so the task stays visible in the
         # original author's /api/tasks list; an admin re-running a failed
