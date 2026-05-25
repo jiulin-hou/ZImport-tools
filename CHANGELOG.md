@@ -6,6 +6,82 @@
 2. 运行 `bash deploy/release.sh X.Y.Z` —— 自动跑测试、写版本号、提交、
    打 tag、推送 main 与 tag、生成 `dist/zimport-tools-X.Y.Z.tar.gz`
 
+## v1.4.0 — 2026-05-25
+
+审计 v1.3.x 发现的"前后端不对齐 / 空头承诺"做集中收拾。**移除
+dry_run 整个功能**(下面解释),其余几项坐实。
+
+**移除:dry_run 预览**
+
+承诺断裂:预览任务跑完是 `done`,前端"重试"只对 failed/interrupted/
+cancelled 显示,所以预览完用户没法用 UI 触发真实导入,只能再上传
+一遍同样的文件。tgz 模式上 dry_run 是干脆什么都不做就标 done(Zimbra
+内部一次性 import,根本没机会"模拟")。**用户实际收益小、UI 表现
+具有误导性**。把整个功能拿掉:
+
+- `web.py` 删 `dry_run` 入参处理
+- `store.create_task` 删 `dry_run` 参数(schema 列保留,向后兼容)
+- `worker.py` 删 `is_dry_run` 分支 + tgz 空头承诺分支
+- 前端 `index.html` 删"先预览"按钮、`app.js` 删 `runImport({dryRun})`
+  路径、任务详情区不再显示"预览"徽标和"这是预览结果"说明
+- 删 2 个相关测试
+
+**修:tgz 任务运行中点取消会永远卡 cancelling**
+
+Zimbra REST 一次性 PUT tgz,worker 没机会在中间感知 cancel。
+v1.3.0 写 cancel 时假设所有任务都能感知。
+
+修法:
+- `web.py` cancel 端点对 `running + kind=zimbra-export` 直接返 400
+  并解释"tgz 任务由 Zimbra 内部一次性处理"
+- `worker.py` 进 inject_tgz 前最后再查一次 cancel(给 queued 阶段
+  取消的用户机会;queued 仍可取消)
+- 前端任务行对 running 的 tgz 任务不再显示"取消"链接
+
+**修:续传 UI 实际无法工作**
+
+`maybeOfferResume` 弹 confirm 让用户"重新选择同一文件",但 HTML
+file input 不能 programmatically 触发,用户确认完什么都没发生。
+
+修法:弹窗删掉,改成主卡片顶部一条**常驻黄色提示条**:
+"上次有未完成的上传:foo.eml、bar.eml。在下方'选择文件'里选回
+同样的文件即可自动续传剩余分片。[放弃这次未完成上传]"
+
+主动选回相同文件 → 自动续传;选别的文件 → 后端 upload_id 不匹配
+自然作废;点"放弃" → 立即清掉 localStorage。
+
+**修:retry only_failed 没校验 keep_files 文件存在**
+
+如果 `temp_dir/input/` 被(部分)清理,keep_files 里的文件可能
+已经丢了,worker 跑出来直接 0 进度,用户无感。
+
+修法:web 层创建新任务前 `os.listdir(input/)` 过滤掉不存在的;
+全部不在就返 400 + 提示"原任务的文件可能已被清理"。
+
+**改进:"+新建文件夹"prompt 默认值基于当前选中**
+
+之前默认填写死的 `Inbox/新文件夹`。改成 `<当前选中>/新子文件夹`,
+比如选了 `Inbox/2024/Q3` 点"+新建",默认值是
+`Inbox/2024/Q3/新子文件夹`。
+
+**改进:README 反映 v1.3.x 所有新功能**
+
+重写「使用」段:`+新建`、任务备注、取消、重试、只重试失败、详情
+区三段分类(跳过/提醒/失败)、续传体验都有说明。
+
+**清理:5 处 lint(pyflakes)**
+
+`web.py` 删 unused `archive` 导入;`tests/test_zimbra_auth.py` 删
+unused `pytest`;`tests/test_web.py` 删 unused `_web` 局部 import;
+`tests/test_worker.py` 两处 unused(`tid` 局部、`zimbra_inject`
+局部 import)。
+
+**回归测试(+2)**
+
+- `test_cancel_running_tgz_rejected`:running 的 tgz 任务点取消必 400
+- `test_retry_only_failed_filters_missing_input_files`:input/ 部分
+  缺失时,keep_files 过滤掉不存在的并存到新任务
+
 ## v1.3.3 — 2026-05-25
 
 **修"新建文件夹"对嵌套路径报 502 的 bug**
