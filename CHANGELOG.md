@@ -6,6 +6,26 @@
 2. 运行 `bash deploy/release.sh X.Y.Z` —— 自动跑测试、写版本号、提交、
    打 tag、推送 main 与 tag、生成 `dist/zimport-tools-X.Y.Z.tar.gz`
 
+## v1.3.3 — 2026-05-25
+
+**修"新建文件夹"对嵌套路径报 502 的 bug**
+
+v1.3.0 引入的 `POST /api/folders` 把整个路径作为 `name` 字段传给
+Zimbra `CreateFolderRequest`,但 Zimbra 拒绝含 `/` 的 name(返
+`invalid name: Inbox/X`),所以任何带斜杠的路径都直接 502。前端
+默认填的就是 `Inbox/新文件夹`,实际上必踩。
+
+**修法**:`zimbra_folders.create_folder` 重写成递归 —— 拆路径,逐段
+先 `GetFolderRequest path=...` 看父级在不在,在就拿 numeric id 作为
+下一层的 `l` 参数,不在就 `CreateFolderRequest` 建出来。完全 idempotent
+(已存在直接复用),也不需要预先建中间节点。
+
+**新增 4 个回归测试**:
+- 单段创建路径
+- 嵌套多段(校验每个 `l` 参数都是上一层的真实 id)
+- 完全已存在 → 不发任何 CreateFolderRequest
+- 空路径 / 纯 `/` → 直接 FolderError
+
 ## v1.3.2 — 2026-05-25
 
 让 dedupe 的两个"漏判静默"场景对用户可见。
