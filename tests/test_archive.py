@@ -119,3 +119,34 @@ def test_normalize_zimbra_export_repacks_clean(tmp_path):
     raw = open(result.repacked_tgz, "rb").read()
     import gzip
     assert b"PaxHeader" not in gzip.decompress(raw)
+
+
+def test_unpack_rejects_unix_compress_file(tmp_path):
+    """名为 .tgz 但实际是老式 Unix compress (.Z) 数据 —— 给清晰错误,
+    不让 tarfile 抛 Python 内部堆栈。"""
+    fake = tmp_path / "陈瑞收件箱邮件.tgz"
+    # `compress` 魔术字 1F 9D + 一堆随便的 LZW 字节
+    fake.write_bytes(b"\x1f\x9d\x90" + b"\x00" * 200)
+    with pytest.raises(ValueError) as exc:
+        archive.unpack_tgz(str(fake), str(tmp_path / "out"))
+    msg = str(exc.value)
+    # 错误信息应该提到 compress / .Z,而不是 ReadError 之类
+    assert ".Z" in msg or "compress" in msg.lower()
+
+
+def test_unpack_rejects_zip_file(tmp_path):
+    """名为 .tgz 但是 ZIP 数据 —— 也给清晰错误。"""
+    fake = tmp_path / "x.tgz"
+    fake.write_bytes(b"PK\x03\x04" + b"\x00" * 200)
+    with pytest.raises(ValueError) as exc:
+        archive.unpack_tgz(str(fake), str(tmp_path / "out2"))
+    assert "zip" in str(exc.value).lower()
+
+
+def test_unpack_rejects_random_garbage(tmp_path):
+    """随机字节 —— catch-all 错误信息。"""
+    fake = tmp_path / "y.tgz"
+    fake.write_bytes(b"this is just plain text, not an archive at all\n" * 5)
+    with pytest.raises(ValueError) as exc:
+        archive.unpack_tgz(str(fake), str(tmp_path / "out3"))
+    assert "tgz" in str(exc.value) or "gzip" in str(exc.value) or "归档" in str(exc.value)
