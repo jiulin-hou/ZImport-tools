@@ -360,6 +360,8 @@ async function refreshTasks() {
     const skipped = t.skipped || 0;
     const failed = t.failed || 0;
     const tr = document.createElement("tr");
+    tr.className = "task-row";
+    tr.dataset.tid = t.id;
     tr.title = "完整任务 ID:" + t.id;
     tr.innerHTML =
       `<td>${esc(t.id.slice(0, 8))}</td>` +
@@ -373,6 +375,10 @@ async function refreshTasks() {
     tbody.appendChild(tr);
   }
   bindActionLinks(tbody);
+  // Restore inline-expanded details that survived this refresh
+  for (const tid of [...expandedDetails]) {
+    renderTaskDetail(tid);  // fire-and-forget; ignores if row no longer present
+  }
   if (anyActive && !pollTimer) {
     pollTimer = setInterval(refreshTasks, 3000);
   } else if (!anyActive && pollTimer) {
@@ -381,11 +387,19 @@ async function refreshTasks() {
   }
 }
 
+function hasDetail(t) {
+  const skipped = t.skipped || 0;
+  const failed = t.failed || 0;
+  return (skipped + failed > 0)
+      || ["failed", "interrupted", "cancelled"].includes(t.status)
+      || Boolean(t.error);
+}
+
 function actionLinks(t) {
   const out = [];
   const skipped = t.skipped || 0;
   const failed = t.failed || 0;
-  if (skipped + failed > 0) {
+  if (hasDetail(t)) {
     out.push(`<a href="#" data-tid="${esc(t.id)}" class="link-detail">详情</a>`);
   }
   if (t.status === "queued"
@@ -404,7 +418,7 @@ function actionLinks(t) {
 
 function bindActionLinks(root) {
   root.querySelectorAll(".link-detail").forEach(a => {
-    a.onclick = (e) => { e.preventDefault(); showTaskDetail(a.dataset.tid); };
+    a.onclick = (e) => { e.preventDefault(); toggleTaskDetail(a.dataset.tid); };
   });
   root.querySelectorAll(".link-cancel").forEach(a => {
     a.onclick = async (e) => {
@@ -462,17 +476,52 @@ function classifyEntry(f) {
   return "failure";
 }
 
-async function showTaskDetail(tid) {
+// Track which task IDs have an inline-expanded detail row, so periodic
+// refreshTasks() can re-attach them after rebuilding the table body.
+const expandedDetails = new Set();
+
+const TASKS_TABLE_COLSPAN = 8;
+
+async function toggleTaskDetail(tid) {
+  if (expandedDetails.has(tid)) {
+    expandedDetails.delete(tid);
+    _removeDetailRow(tid);
+    return;
+  }
+  expandedDetails.add(tid);
+  await renderTaskDetail(tid);
+}
+
+function _removeDetailRow(tid) {
+  const row = document.querySelector(
+    `#tasks tbody tr.task-detail[data-tid="${cssEscape(tid)}"]`);
+  if (row) row.remove();
+}
+
+function cssEscape(s) {
+  // Minimal: tids are hex/uuid-like, but be defensive.
+  return String(s).replace(/(["\\])/g, "\\$1");
+}
+
+async function renderTaskDetail(tid) {
+  const taskRow = document.querySelector(
+    `#tasks tbody tr.task-row[data-tid="${cssEscape(tid)}"]`);
+  if (!taskRow) return;  // row no longer in table (task purged, etc.)
+
   const r = await apiFetch("api/tasks/" + encodeURIComponent(tid));
-  if (!r.ok) { toast("无法加载详情", "err"); return; }
+  if (!r.ok) {
+    expandedDetails.delete(tid);
+    toast("无法加载详情", "err");
+    return;
+  }
   const t = await r.json();
+
   let failures = t.failures;
   if (typeof failures === "string") {
     try { failures = JSON.parse(failures); } catch (e) { failures = []; }
   }
   failures = failures || [];
 
-  // Group into duplicates / warnings / failures, then by code within each.
   const dupes = failures.filter(f => classifyEntry(f) === "duplicate");
   const warns = failures.filter(f => classifyEntry(f) === "warning");
   const fails = failures.filter(f => classifyEntry(f) === "failure");
@@ -489,7 +538,7 @@ async function showTaskDetail(tid) {
   const renderRow = (f) =>
     `<li>${esc(f.name)} — ${esc(f.reason || REASON_BY_CODE[f.code] || "未知")}</li>`;
 
-  const renderSection = (title, klass, byCode) => {
+  const renderSection = (klass, byCode) => {
     const parts = [];
     for (const code of Object.keys(byCode)) {
       const list = byCode[code];
@@ -501,11 +550,15 @@ async function showTaskDetail(tid) {
   };
 
   const sections = [];
-  sections.push(
-    `<h3>任务 ${esc(t.id.slice(0, 8))} 详情 ` +
-    `<button id="closeDetail" type="button" class="ghost">关闭</button></h3>`
-  );
   if (t.label) sections.push(`<p class="muted">备注:${esc(t.label)}</p>`);
+  // Surface task-level error (set when worker aborts before / between per-eml
+  // injection: archive normalize crash, delegate_token failure, disk full…).
+  if (t.error) {
+    sections.push(
+      `<p class="err"><b>任务整体失败</b></p>` +
+      `<pre class="task-error">${esc(t.error)}</pre>`
+    );
+  }
   if (dupes.length) {
     sections.push(`<p><b>跳过 ${dupes.length} 个</b>(已存在的重复邮件)</p>`);
     sections.push(`<ul>${dupes.map(renderRow).join("")}</ul>`);
@@ -513,20 +566,27 @@ async function showTaskDetail(tid) {
   if (warns.length) {
     sections.push(`<p class="warn"><b>提醒 ${warns.length} 个</b>` +
                   `(已导入但需注意,详情见下)</p>`);
-    sections.push(renderSection("提醒", "warn", groupByCode(warns)));
+    sections.push(renderSection("warn", groupByCode(warns)));
   }
   if (fails.length) {
     sections.push(`<p class="err"><b>失败 ${fails.length} 个</b></p>`);
-    sections.push(renderSection("失败", "err", groupByCode(fails)));
+    sections.push(renderSection("err", groupByCode(fails)));
   }
-  if (!dupes.length && !warns.length && !fails.length) {
+  if (!sections.length) {
     sections.push("<p>无详情</p>");
   }
 
-  const box = $("taskDetail");
-  box.classList.remove("hidden");
-  box.innerHTML = sections.join("");
-  $("closeDetail").onclick = () => box.classList.add("hidden");
+  // Remove any previous detail row for this tid (in case of refresh + restore).
+  _removeDetailRow(tid);
+
+  const detailTr = document.createElement("tr");
+  detailTr.className = "task-detail";
+  detailTr.dataset.tid = tid;
+  detailTr.innerHTML =
+    `<td colspan="${TASKS_TABLE_COLSPAN}">` +
+    `<div class="task-detail-body">${sections.join("")}</div>` +
+    `</td>`;
+  taskRow.parentNode.insertBefore(detailTr, taskRow.nextSibling);
 }
 
 function statusText(s) {

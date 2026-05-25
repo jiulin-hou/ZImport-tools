@@ -302,6 +302,19 @@ td .bar { display: inline-block; width: 100px; vertical-align: middle; }
   margin-top: 8px;
 }
 
+.task-error {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 4px 0 10px;
+}
+
 #resumeBanner {
   margin: 8px 0 14px;
   padding: 8px 12px;
