@@ -6,6 +6,31 @@
 2. 运行 `bash deploy/release.sh X.Y.Z` —— 自动跑测试、写版本号、提交、
    打 tag、推送 main 与 tag、生成 `dist/zimport-tools-X.Y.Z.tar.gz`
 
+## v1.4.3 — 2026-05-25
+
+**真正的一键部署 + README 修正过时链接**
+
+之前 README 说"#2 一键环境准备"但后面还有 #3 #4 #5 三个手动步骤,
+总共 12 条命令。新增 `deploy/install.sh` 串起所有阶段:
+
+1. `setup.sh`(环境 + venv + config + Zimbra 服务账号)
+2. 拷贝 systemd unit → daemon-reload → enable --now
+3. `setup-proxy.sh`(Zimbra 主 nginx 反代)
+4. Zimlet 打包 + undeploy 旧版 + deploy 新版 + 强制启用 + flush
+   cache
+
+完成后打印"用户注销 Zimbra Web 重登就能用"。所有阶段都幂等,
+失败重跑 install.sh 就行;分步排错单独跑子脚本也可以。
+
+**其他**
+
+- README 下载 URL 从 `v1.2.0` 改成 `v1.4.2`(过时)
+- README「部署」段大幅简化:**一条命令 + 分步备用**,代替之前的
+  五段教程
+- `deploy/README.md` 重写:一键流程表 + 阶段表 + 分步备用
+- `setup.sh` 末尾的多段"下一步"提示删除(install.sh 已经接管),
+  改成一句话指引
+
 ## v1.4.2 — 2026-05-25
 
 第 3 轮审计抓到的几项 —— 一个文档真错 + 两个工程层面的稳健性改进。
