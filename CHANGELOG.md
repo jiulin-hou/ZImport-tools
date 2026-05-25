@@ -6,6 +6,32 @@
 2. 运行 `bash deploy/release.sh X.Y.Z` —— 自动跑测试、写版本号、提交、
    打 tag、推送 main 与 tag、生成 `dist/zimport-tools-X.Y.Z.tar.gz`
 
+## v1.3.1 — 2026-05-25
+
+**修一个 v1.3.0 用户上报的真实 dedupe bug**
+
+v1.3.0 引入的 `batch_existing_message_ids` 用 OR 合并的 SOAP search
+减少 round-trip,但实现假设 Zimbra `SearchResponse` 的每个 hit 里带
+Message-ID 字段 —— 实测 Zimbra 8.8.15 hits 只回 `cid/cm/d/e/f/fr/id/
+l/rev/s/sf/su`(全是 envelope metadata),完全没有 Message-ID。结果:
+
+- batch 函数永远返回空集
+- worker 看不到任何"邮箱已存在"的命中
+- **dedupe 静默失效**:之前已经在邮箱里的邮件,预览跑完显示"全部
+  会导入"、真实导入也会再次写入造成重复
+
+**修法**:`batch_existing_message_ids` 内部退回到逐封 `message_exists`
+查询(每封一次 SOAP)。性能从理论 N/50 退到 N,但 Zimbra 同机 LDAP
+search 单次约 10ms,1000 封 dedupe ≈ 10 秒,可接受。worker 接口不变,
+未来真正解决"如何从 batch 查询拿 Message-ID"再优化回来。
+
+**回归测试**
+
+- `test_batch_existing_message_ids_returns_only_present`:验证函数
+  契约——传入 mid 列表,返回邮箱实际存在的子集
+- `test_process_task_dry_run_marks_existing_as_skipped`:端到端守
+  用户上报的场景——已存在的邮件预览必须 skipped=1 而不是 done=1
+
 ## v1.3.0 — 2026-05-25
 
 围绕"邮件导入流程 / 检测提示"的体验和能力升级。后端 API 扩展 +
