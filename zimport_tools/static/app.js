@@ -27,7 +27,7 @@ async function probeSession() {
   showOnly("loading");
   let r;
   try {
-    r = await apiFetch("/api/me");
+    r = await apiFetch("api/me");
   } catch (e) {
     showError("网络异常,无法连接 ZImport-tools。");
     return;
@@ -54,7 +54,7 @@ async function probeSession() {
 
 async function loadFolders() {
   const ta = $("targetAccount").value.trim();
-  const url = "/api/folders" + (ta ? "?account=" + encodeURIComponent(ta) : "");
+  const url = "api/folders" + (ta ? "?account=" + encodeURIComponent(ta) : "");
   const r = await apiFetch(url);
   const sel = $("folder");
   sel.innerHTML = "";
@@ -88,7 +88,7 @@ async function uploadFile(uploadId, fileIndex, file) {
     fd.append("file_index", fileIndex);
     fd.append("chunk_index", i);
     fd.append("blob", blob);
-    const r = await apiFetch("/api/upload/chunk", { method: "POST", body: fd });
+    const r = await apiFetch("api/upload/chunk", { method: "POST", body: fd });
     if (!r.ok) throw new Error("上传分片失败: " + r.status);
     $("uploadProgress").textContent =
       `上传 ${file.name}: ${i + 1}/${total} 片`;
@@ -100,7 +100,7 @@ $("startBtn").onclick = async () => {
   const files = $("files").files;
   if (!files.length) { alert("请先选择文件"); return; }
   try {
-    const init = await (await apiFetch("/api/upload/init", {
+    const init = await (await apiFetch("api/upload/init", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{}",
@@ -118,7 +118,7 @@ $("startBtn").onclick = async () => {
     };
     const ta = $("targetAccount").value.trim();
     if (ta) body.account = ta;
-    const r = await apiFetch("/api/import", {
+    const r = await apiFetch("api/import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -133,7 +133,7 @@ $("startBtn").onclick = async () => {
 };
 
 async function refreshTasks() {
-  const r = await apiFetch("/api/tasks");
+  const r = await apiFetch("api/tasks");
   if (!r.ok) return;
   const tasks = await r.json();
   const tbody = $("tasks").querySelector("tbody");
@@ -142,20 +142,64 @@ async function refreshTasks() {
   for (const t of tasks) {
     if (t.status === "queued" || t.status === "running") anyActive = true;
     const pct = t.total ? Math.round(100 * t.done / t.total) : 0;
+    const skipped = t.skipped || 0;
+    const failed = t.failed || 0;
+    const hasDetails = (skipped + failed) > 0;
     const tr = document.createElement("tr");
     tr.innerHTML =
       `<td>${t.id.slice(0, 8)}</td><td>${t.account}</td>` +
       `<td>${statusText(t.status)}</td>` +
       `<td><div class="bar"><div style="width:${pct}%"></div></div>${t.done}/${t.total}</td>` +
-      `<td>${t.failed}</td>`;
+      `<td>${skipped}</td>` +
+      `<td>${failed}</td>` +
+      `<td>${hasDetails ? `<a href="#" data-tid="${t.id}" class="detail-link">详情</a>` : ""}</td>`;
     tbody.appendChild(tr);
   }
+  tbody.querySelectorAll(".detail-link").forEach(a => {
+    a.onclick = (e) => { e.preventDefault(); showTaskDetail(a.dataset.tid); };
+  });
   if (anyActive && !pollTimer) {
     pollTimer = setInterval(refreshTasks, 3000);
   } else if (!anyActive && pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
   }
+}
+
+function reasonText(r) {
+  return r === "duplicate (same batch)" ? "重复(本批内同 Message-ID)" :
+         r === "duplicate (already in mailbox)" ? "重复(邮箱内已存在)" :
+         r;
+}
+
+async function showTaskDetail(tid) {
+  const r = await apiFetch("api/tasks/" + encodeURIComponent(tid));
+  if (!r.ok) { alert("无法加载详情"); return; }
+  const t = await r.json();
+  let failures = t.failures;
+  if (typeof failures === "string") {
+    try { failures = JSON.parse(failures); } catch (e) { failures = []; }
+  }
+  failures = failures || [];
+  const skipped = failures.filter(f => /duplicate/.test(f.reason));
+  const failed = failures.filter(f => !/duplicate/.test(f.reason));
+  const box = $("taskDetail");
+  box.classList.remove("hidden");
+  box.innerHTML =
+    `<h3>任务 ${t.id.slice(0, 8)} 详情 ` +
+    `<button id="closeDetail">关闭</button></h3>` +
+    (skipped.length
+      ? `<p><b>跳过 ${skipped.length} 个(已存在的重复邮件)</b></p>` +
+        `<ul>${skipped.map(f =>
+          `<li>${f.name} — ${reasonText(f.reason)}</li>`).join("")}</ul>`
+      : "") +
+    (failed.length
+      ? `<p class="err"><b>失败 ${failed.length} 个</b></p>` +
+        `<ul>${failed.map(f =>
+          `<li>${f.name} — ${f.reason}</li>`).join("")}</ul>`
+      : "") +
+    (!skipped.length && !failed.length ? "<p>无详情</p>" : "");
+  $("closeDetail").onclick = () => box.classList.add("hidden");
 }
 
 function statusText(s) {

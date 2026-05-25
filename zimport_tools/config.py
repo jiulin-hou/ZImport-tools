@@ -9,6 +9,11 @@ class Config:
         self.listen_host = cp.get("server", "listen_host", fallback="127.0.0.1")
         self.listen_port = cp.getint("server", "listen_port", fallback=8088)
         self.secret_key = cp.get("server", "secret_key")
+        self.web_origins = [
+            o.strip().rstrip("/")
+            for o in cp.get("server", "web_origins", fallback="").split(",")
+            if o.strip()
+        ]
         self.soap_url = cp.get("zimbra", "soap_url")
         self.admin_soap_url = cp.get("zimbra", "admin_soap_url")
         self.rest_base = cp.get("zimbra", "rest_base").rstrip("/")

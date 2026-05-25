@@ -177,9 +177,10 @@ PYEOF
 
     # 若本机即 Zimbra,自动创建服务账号(若不存在)
     if [ "$HAS_ZIMBRA" = "1" ]; then
-        if su - zimbra -c "/opt/zimbra/bin/zmprov ga $SVC_NAME_DEFAULT 2>/dev/null | grep -q 'name:'" 2>/dev/null; then
-            warn "服务账号 $SVC_NAME_DEFAULT 已存在 —— config.ini 写入的是新生成的密码,"
-            warn "如果该账号有人正在用,请手工 zmprov sp 同步密码或在 config.ini 改回旧密码"
+        if su - zimbra -c "/opt/zimbra/bin/zmprov ga $SVC_NAME_DEFAULT" >/dev/null 2>&1; then
+            log "服务账号 $SVC_NAME_DEFAULT 已存在 —— 用 zmprov sp 同步 config.ini 的新密码"
+            su - zimbra -c "/opt/zimbra/bin/zmprov sp $SVC_NAME_DEFAULT '$SVC_PASS'" >/dev/null
+            su - zimbra -c "/opt/zimbra/bin/zmprov ma $SVC_NAME_DEFAULT zimbraIsAdminAccount TRUE" >/dev/null
         else
             log "在 Zimbra 上创建服务账号 $SVC_NAME_DEFAULT(标记 admin)"
             su - zimbra -c "/opt/zimbra/bin/zmprov ca $SVC_NAME_DEFAULT '$SVC_PASS' displayName 'ZImport Service'" >/dev/null

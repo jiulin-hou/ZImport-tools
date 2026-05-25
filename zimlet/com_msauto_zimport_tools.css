@@ -1,5 +1,43 @@
+.zit-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    background: rgba(0, 0, 0, 0.55);
+    display: block;
+}
+.zit-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 36px;
+    line-height: 36px;
+    padding: 0 16px;
+    color: #fff;
+    background: #2b3b4e;
+    font-weight: 600;
+}
+.zit-close {
+    position: absolute;
+    top: 5px;
+    right: 12px;
+    padding: 4px 12px;
+    cursor: pointer;
+    background: #fff;
+    color: #333;
+    border: 1px solid #aaa;
+    border-radius: 3px;
+    font-size: 13px;
+    font-weight: normal;
+}
 .zit-iframe {
+    position: absolute;
+    top: 36px;
+    left: 0;
+    right: 0;
+    bottom: 0;
     width: 100%;
-    height: calc(100vh - 80px);
+    height: calc(100% - 36px);
     border: 0;
+    background: #fff;
 }

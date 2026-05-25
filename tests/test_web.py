@@ -14,6 +14,7 @@ class _Cfg:
     chunk_size = 1024
     rest_base = "https://h:8443"
     verify_tls = False
+    web_origins = ["https://h:8443"]
 
 
 @pytest.fixture
@@ -126,6 +127,23 @@ def test_csrf_valid_request_passes(app, patch_validate):
     resp = client.post("/api/_test_csrf",
                        headers={"X-Zimport-CSRF": "1",
                                 "Origin": "https://h:8443"})
+    assert resp.status_code == 200
+
+
+def test_csrf_origin_not_enforced_when_whitelist_empty(tmp_path, patch_validate):
+    cfg = _Cfg()
+    cfg.temp_root = str(tmp_path / "tmp")
+    cfg.db_path = str(tmp_path / "t.db")
+    cfg.web_origins = []
+    application = web.create_app(cfg)
+    application.config["TESTING"] = True
+    application.config["SESSION_COOKIE_SECURE"] = False
+    patch_validate({"TOK": Identity(False, "u@d")})
+    client = application.test_client()
+    client.set_cookie("ZM_AUTH_TOKEN", "TOK")
+    resp = client.post("/api/_test_csrf",
+                       headers={"X-Zimport-CSRF": "1",
+                                "Origin": "https://anywhere.example.com"})
     assert resp.status_code == 200
 
 

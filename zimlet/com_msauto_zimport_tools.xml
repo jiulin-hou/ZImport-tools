@@ -1,6 +1,8 @@
-<zimlet name="com_msauto_zimport_tools" version="1.0.0" description="ZImport-tools — Zimbra 数据导入">
+<zimlet name="com_msauto_zimport_tools" version="1.0.0" description="ZImport-tools — 数据导入">
     <include>com_msauto_zimport_tools.js</include>
     <includeCSS>com_msauto_zimport_tools.css</includeCSS>
     <handlerObject>com_msauto_zimport_tools_HandlerObject</handlerObject>
-    <zimletPanelItem label="数据导入" icon="ZimletAlertImg"/>
+    <zimletPanelItem label="数据导入" icon="ZimletAlertImg">
+        <toolTipText>打开 ZImport-tools 数据导入</toolTipText>
+    </zimletPanelItem>
 </zimlet>

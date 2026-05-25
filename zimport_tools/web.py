@@ -65,7 +65,10 @@ def create_app(cfg):
     store = TaskStore(cfg.db_path)
     os.makedirs(cfg.temp_root, exist_ok=True)
 
-    expected_origin = _origin_from_url(cfg.rest_base)
+    # Allowed browser origins. Empty list = origin not enforced (the custom
+    # CSRF header alone defends against cross-site form submission since
+    # browsers refuse to set X-* headers without CORS).
+    allowed_origins = set(cfg.web_origins)
 
     def _csrf_check():
         if request.method not in _STATE_CHANGING:
@@ -73,7 +76,7 @@ def create_app(cfg):
         if request.headers.get(_CSRF_HEADER) != "1":
             return jsonify({"error": "非法请求来源"}), 403
         origin = request.headers.get("Origin")
-        if origin and expected_origin and origin != expected_origin:
+        if allowed_origins and origin and origin not in allowed_origins:
             return jsonify({"error": "非法请求来源"}), 403
         return None
 

@@ -4,34 +4,39 @@ com_msauto_zimport_tools_HandlerObject.prototype.constructor =
     com_msauto_zimport_tools_HandlerObject;
 
 var Zit = com_msauto_zimport_tools_HandlerObject;
-
-Zit.APP_NAME = "ZIMPORT_TOOLS";
 Zit.IFRAME_SRC = "/zimport-tools/";
+Zit.OVERLAY_ID = "zit-overlay";
 
-Zit.prototype.init = function() {
-    // Register an application in the top app chooser.
-    // The exact ZmApp registration API on Zimbra 8.8.15 may need adjustment;
-    // see docs spec §13 ("待细化"). Below is the standard classic pattern.
-    var app = appCtxt.getApp(Zit.APP_NAME);
-    if (!app) {
-        ZmApp.registerApp(Zit.APP_NAME, {
-            nameKey:           "数据导入",
-            icon:              "ZimletAlertImg",
-            chooserTooltipKey: "数据导入",
-            viewTooltipKey:    "数据导入",
-            defaultSort:       Number.MAX_VALUE,
-            chooserSort:       Number.MAX_VALUE
-        });
+Zit._open = function() {
+    var existing = document.getElementById(Zit.OVERLAY_ID);
+    if (existing) {
+        existing.style.display = "block";
+        return;
     }
+    var overlay = document.createElement("div");
+    overlay.id = Zit.OVERLAY_ID;
+    overlay.className = "zit-overlay";
+
+    var bar = document.createElement("div");
+    bar.className = "zit-bar";
+    bar.textContent = "数据导入";
+
+    var close = document.createElement("button");
+    close.className = "zit-close";
+    close.textContent = "× 关闭";
+    close.onclick = function() {
+        overlay.style.display = "none";
+    };
+    bar.appendChild(close);
+
+    var iframe = document.createElement("iframe");
+    iframe.className = "zit-iframe";
+    iframe.src = Zit.IFRAME_SRC;
+
+    overlay.appendChild(bar);
+    overlay.appendChild(iframe);
+    document.body.appendChild(overlay);
 };
 
-Zit.prototype.appActive = function(appName, active) {
-    if (appName !== Zit.APP_NAME || !active) return;
-    if (document.getElementById("zit-iframe-host")) return;
-    var iframe = document.createElement("iframe");
-    iframe.id = "zit-iframe-host";
-    iframe.src = Zit.IFRAME_SRC;
-    iframe.className = "zit-iframe";
-    var shell = appCtxt.getShell();
-    shell.getHtmlElement().appendChild(iframe);
-};
+Zit.prototype.singleClicked = function() { Zit._open(); };
+Zit.prototype.doubleClicked = function() { Zit._open(); };
