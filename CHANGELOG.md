@@ -6,6 +6,24 @@
 2. 运行 `bash deploy/release.sh X.Y.Z` —— 自动跑测试、写版本号、提交、
    打 tag、推送 main 与 tag、生成 `dist/zimport-tools-X.Y.Z.tar.gz`
 
+## v1.2.2 — 2026-05-25
+
+收拾 v1.2.1 审计时归到"非 bug 但可改"的几项小事。
+
+- **`__version__` 真正被消费**:新增公开端点 `GET /api/version` 暴露
+  当前部署版本号;前端页脚显示 `ZImport-tools vX.Y.Z`。运维和用户
+  能直接看到部署没没成功。
+- **前端局部变量 `session` → `identity`**:避免和 Flask session 概念
+  混淆(虽然 v1.2.0 后端已经没 session 了)。
+- **`deploy/release.sh` 测试路径**:优先用项目 `venv`,其次任何可用
+  的 `python3 -m pytest`,都没有才警告跳过 —— 消除每次发版要手动
+  `ln -s` venv 软链的绕路。
+- **`deploy/release.sh` 自动建 GitHub Release**:检测到 `gh` 已装且
+  `gh auth status` 通过时,自动 `gh release create` 挂交付包 +
+  从 CHANGELOG 提取本版段落作 release notes。`gh` 缺失则跳过(打印
+  手动命令),不阻断发版。需要这功能的开发机执行一次:
+  `sudo apt install -y gh && gh auth login`。
+
 ## v1.2.1 — 2026-05-25
 
 清理 v1.2.0 改完后留在仓库里的几处死代码 / 误导注释。
