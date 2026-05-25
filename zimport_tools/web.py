@@ -18,7 +18,7 @@ import shutil
 
 from flask import Flask, g, jsonify, request, send_from_directory
 
-from zimport_tools import (__version__, archive, uploads, zimbra_auth,
+from zimport_tools import (__version__, uploads, zimbra_auth,
                            zimbra_folders, zimbra_search, zimbra_session)
 from zimport_tools.store import TaskStore
 from zimport_tools.zimbra_auth import AuthError
@@ -149,6 +149,14 @@ def create_app(cfg):
             return jsonify({"error": "任务不存在"}), 404
         if task["requester"] != g.account and not g.is_admin:
             return jsonify({"error": "无权取消此任务"}), 403
+        # tgz 模式 Zimbra 内部一次性处理,worker 没机会在中间感知 cancel —
+        # 拒绝避免任务永远卡在 cancelling。queued 阶段仍可取消(worker 还
+        # 没开跑),所以只对 running 的 tgz 拒。
+        if (task["status"] == "running"
+                and task.get("kind") == "zimbra-export"):
+            return jsonify({
+                "error": "tgz 任务由 Zimbra 内部一次性处理,运行中无法取消"
+            }), 400
         new_status = store.request_cancel(task_id)
         if new_status is None:
             return jsonify({"error": "仅排队/运行中的任务可取消"}), 400
@@ -191,8 +199,14 @@ def create_app(cfg):
                 and not any(str(f.get("code", "")).startswith(p)
                             for p in _NOT_FAILURES)
             ]
+            # Guard against the original input/ being partially cleaned or
+            # otherwise missing the files we want to re-run.
+            input_dir = os.path.join(task["temp_dir"], "input")
+            existing = (set(os.listdir(input_dir))
+                        if os.path.isdir(input_dir) else set())
+            keep_files = [n for n in keep_files if n in existing]
             if not keep_files:
-                return jsonify({"error": "没有真正失败的文件可重试"}), 400
+                return jsonify({"error": "没有真正失败的文件可重试(原任务的文件可能已被清理)"}), 400
 
         # Keep the original requester so the task stays visible in the
         # original author's /api/tasks list; an admin re-running a failed
@@ -307,7 +321,6 @@ def create_app(cfg):
         label = body.get("label") or None
         if label:
             label = str(label)[:120]  # cap to keep DB reasonable
-        dry_run = bool(body.get("dry_run"))
 
         # 越权防护:管理员可指定目标账户,普通用户强制为本人
         account = g.account
@@ -338,7 +351,7 @@ def create_app(cfg):
             account=account, requester=g.account,
             target_folder=folder,
             temp_dir=uploads.upload_dir(cfg.temp_root, upload_id),
-            label=label, dry_run=dry_run)
+            label=label)
         return jsonify({"task_id": task_id})
 
     # --- CSRF unit-test endpoint ---------------------------------------

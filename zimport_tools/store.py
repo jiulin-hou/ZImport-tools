@@ -66,8 +66,8 @@ class TaskStore:
         return conn
 
     def create_task(self, account, requester, target_folder, temp_dir,
-                    label=None, dry_run=False, keep_files=None):
-        """keep_files: optional list of basenames to skip during processing
+                    label=None, keep_files=None):
+        """keep_files: optional list of basenames to keep during processing
         (used by `retry only_failed` to re-run just the previously failed
         files). Stored as JSON; worker honors it."""
         tid = uuid.uuid4().hex
@@ -77,11 +77,11 @@ class TaskStore:
         try:
             conn.execute(
                 "INSERT INTO tasks (id, account, requester, status, "
-                "target_folder, temp_dir, label, dry_run, keep_files, "
+                "target_folder, temp_dir, label, keep_files, "
                 "created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (tid, account, requester, "queued", target_folder,
-                 temp_dir, label, 1 if dry_run else 0, keep_json, ts, ts))
+                 temp_dir, label, keep_json, ts, ts))
             conn.commit()
         finally:
             conn.close()

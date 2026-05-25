@@ -31,7 +31,6 @@ def _inject_eml_with_retry(cfg, account, folder, token, path,
 
 def process_task(cfg, store, task):
     tid = task["id"]
-    is_dry_run = bool(task.get("dry_run"))
     raw_keep = task.get("keep_files")
     keep_set = set()
     if raw_keep:
@@ -50,15 +49,15 @@ def process_task(cfg, store, task):
 
         if norm.kind == "zimbra-export":
             store.set_totals(tid, 1)
-            if is_dry_run:
-                # tgz dry-run: no per-message preview possible (Zimbra unpacks
-                # inside), just mark done.
-                store.update_progress(tid, done=0, failed=0)
-            else:
-                # tgz 自带 resolve=skip,Zimbra 内部按 Message-ID 去重
-                zimbra_inject.inject_tgz(cfg, task["account"], token,
-                                         norm.repacked_tgz)
-                store.update_progress(tid, done=1, failed=0)
+            # tgz 走 Zimbra 内部一次性 import,中途无法被 cancel —
+            # 进 inject 之前做最后一次检查,给 queued 期间取消的用户机会。
+            if store.cancel_requested(tid):
+                store.set_status(tid, "cancelled")
+                return
+            # tgz 自带 resolve=skip,Zimbra 内部按 Message-ID 去重
+            zimbra_inject.inject_tgz(cfg, task["account"], token,
+                                     norm.repacked_tgz)
+            store.update_progress(tid, done=1, failed=0)
         else:
             # If keep_set is non-empty, process only those basenames
             # (used by "retry only failed"); otherwise process all.
@@ -133,14 +132,10 @@ def process_task(cfg, store, task):
                                     "name": name,
                                     "code": "dedupe_check_failed",
                                     "reason": "判重查询出错,已直接导入,建议在 Zimbra Web 中手工确认"})
-                    if is_dry_run:
-                        # Dry-run: every non-duplicate counts as "would import".
-                        done += 1
-                    else:
-                        _inject_eml_with_retry(cfg, task["account"],
-                                               task["target_folder"],
-                                               token, path)
-                        done += 1
+                    _inject_eml_with_retry(cfg, task["account"],
+                                           task["target_folder"],
+                                           token, path)
+                    done += 1
                 except zimbra_inject.InjectError as exc:
                     failed += 1
                     failures.append({"name": name,

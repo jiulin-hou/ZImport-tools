@@ -17,6 +17,7 @@
 
   <div id="main" class="card hidden">
     <p>当前登录:<b id="who"></b></p>
+    <div id="resumeBanner" class="hidden"></div>
     <div id="adminBox" class="hidden">
       <label>目标账户(管理员):<input id="targetAccount"
         placeholder="留空=导入到自己"></label>
@@ -35,7 +36,6 @@
              placeholder="例:Q3 历史邮件迁移">
     </label>
     <div class="actions">
-      <button id="dryRunBtn" type="button">先预览(不实际导入)</button>
       <button id="startBtn" type="button" class="primary">开始导入</button>
     </div>
 

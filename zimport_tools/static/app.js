@@ -71,7 +71,7 @@ async function probeSession() {
   await loadFolders();
   showOnly("main");
   refreshTasks();
-  maybeOfferResume();
+  renderResumeBanner();
 }
 
 async function loadFolders() {
@@ -104,7 +104,14 @@ $("retryBtn").onclick = probeSession;
 $("refreshBtn").onclick = refreshTasks;
 
 $("newFolderBtn").onclick = async () => {
-  const name = prompt("新建文件夹路径(可含 /,如 Inbox/2024):", "Inbox/新文件夹");
+  // Default to "<current folder>/新子文件夹" so a user who has selected
+  // Inbox/2024/Q3 and clicks "+ 新建" starts from that prefix rather than
+  // from a hard-coded "Inbox/...".
+  const current = ($("folder").value || "Inbox").replace(/\/+$/, "");
+  const suggested = current + "/新子文件夹";
+  const name = prompt(
+    "新建文件夹路径(默认在当前选中文件夹下创建子文件夹,可任意改):",
+    suggested);
   if (!name) return;
   const account = $("targetAccount").value.trim() || identity.account;
   const r = await apiFetch("api/folders", {
@@ -136,19 +143,28 @@ function savePending(state) {
   else localStorage.removeItem(STORAGE_KEY);
 }
 
-function maybeOfferResume() {
+function renderResumeBanner() {
+  const box = $("resumeBanner");
   const p = loadPending();
-  if (!p || !p.upload_id || !p.files) return;
-  const age = (Date.now() - (p.started_at || 0)) / 1000 / 3600;
-  if (age > 24) { savePending(null); return; }  // stale
-  const summary = p.files.map(f => f.name).join(", ");
-  if (confirm("发现未完成的上传(" + summary + ")。继续上传剩余分片?")) {
-    // The user must re-select the same files (browsers don't restore File
-    // objects across reloads). Just prompt and continue from missing chunks.
-    toast("请在下方重新选择相同的文件,会自动续传未完成的分片", "warn");
-  } else {
-    savePending(null);
+  if (!p || !p.upload_id || !p.files) {
+    box.classList.add("hidden"); box.innerHTML = ""; return;
   }
+  // Stale (> 24h) — drop and don't show.
+  if ((Date.now() - (p.started_at || 0)) / 1000 / 3600 > 24) {
+    savePending(null);
+    box.classList.add("hidden"); box.innerHTML = ""; return;
+  }
+  const summary = p.files.map(f => f.name).join("、");
+  box.classList.remove("hidden");
+  box.innerHTML =
+    "<b>上次有未完成的上传:</b>" + esc(summary) +
+    '。在下方"选择文件"里选回同样的文件即可自动续传剩余分片。' +
+    ' <a href="#" id="resumeDiscard">放弃这次未完成上传</a>';
+  $("resumeDiscard").onclick = (e) => {
+    e.preventDefault();
+    savePending(null);
+    renderResumeBanner();
+  };
 }
 
 async function missingChunks(uploadId, fileIndex, totalChunks) {
@@ -234,10 +250,9 @@ function renderUploadProgress(totals, current) {
   $("uploadEta").textContent = "";
 }
 
-async function runImport(opts) {
+async function runImport() {
   const files = $("files").files;
   if (!files.length) { toast("请先选择文件", "err"); return; }
-  const dryRun = !!opts.dryRun;
   const ta = $("targetAccount").value.trim();
   const label = $("label").value.trim();
   const folder = $("folder").value || "Inbox";
@@ -295,7 +310,7 @@ async function runImport(opts) {
   $("uploadBar").style.width = "100%";
 
   const body = {
-    upload_id: uploadId, files: meta, folder, dry_run: dryRun,
+    upload_id: uploadId, files: meta, folder,
   };
   if (label) body.label = label;
   if (ta) body.account = ta;
@@ -313,14 +328,12 @@ async function runImport(opts) {
   savePending(null);
   $("uploadStage").classList.add("hidden");
   $("queueStage").classList.remove("hidden");
-  $("queueStage").textContent =
-    (dryRun ? "预览任务已入队:" : "导入任务已入队:") +
-    data.task_id.slice(0, 8);
+  $("queueStage").textContent = "导入任务已入队:" + data.task_id.slice(0, 8);
+  renderResumeBanner();
   refreshTasks();
 }
 
-$("startBtn").onclick = () => runImport({ dryRun: false });
-$("dryRunBtn").onclick = () => runImport({ dryRun: true });
+$("startBtn").onclick = () => runImport();
 
 // ---- tasks ----
 
@@ -337,9 +350,8 @@ async function refreshTasks() {
     const skipped = t.skipped || 0;
     const failed = t.failed || 0;
     const tr = document.createElement("tr");
-    const dryTag = t.dry_run ? ' <span class="badge">预览</span>' : "";
     tr.innerHTML =
-      `<td>${esc(t.id.slice(0, 8))}${dryTag}</td>` +
+      `<td>${esc(t.id.slice(0, 8))}</td>` +
       `<td>${esc(t.label || "")}</td>` +
       `<td>${esc(t.account)}</td>` +
       `<td><span class="status status-${esc(t.status)}">${esc(statusText(t.status))}</span></td>` +
@@ -365,7 +377,9 @@ function actionLinks(t) {
   if (skipped + failed > 0) {
     out.push(`<a href="#" data-tid="${esc(t.id)}" class="link-detail">详情</a>`);
   }
-  if (["queued", "running"].includes(t.status)) {
+  if (t.status === "queued"
+      || (t.status === "running" && t.kind !== "zimbra-export")) {
+    // tgz 任务运行中不允许取消(Zimbra 一次性处理,没有可中断窗口)
     out.push(`<a href="#" data-tid="${esc(t.id)}" class="link-cancel">取消</a>`);
   }
   if (["failed", "interrupted", "cancelled"].includes(t.status)) {
@@ -481,10 +495,6 @@ async function showTaskDetail(tid) {
     `<button id="closeDetail" type="button" class="ghost">关闭</button></h3>`
   );
   if (t.label) sections.push(`<p class="muted">备注:${esc(t.label)}</p>`);
-  if (t.dry_run) {
-    sections.push('<p class="muted">这是「先预览」结果 —— 没有真的写邮件。' +
-                  '点上方"重试"会用同样的文件做真实导入。</p>');
-  }
   if (dupes.length) {
     sections.push(`<p><b>跳过 ${dupes.length} 个</b>(已存在的重复邮件)</p>`);
     sections.push(`<ul>${dupes.map(renderRow).join("")}</ul>`);

@@ -1,4 +1,3 @@
-import pytest
 from zimport_tools import zimbra_auth
 
 

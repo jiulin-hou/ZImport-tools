@@ -302,6 +302,22 @@ td .bar { display: inline-block; width: 100px; vertical-align: middle; }
   margin-top: 8px;
 }
 
+#resumeBanner {
+  margin: 8px 0 14px;
+  padding: 8px 12px;
+  background: #fef3c7;
+  border-left: 3px solid var(--warn);
+  border-radius: 4px;
+  font-size: 13px;
+  color: #92400e;
+}
+#resumeBanner a { color: #92400e; }
+
+@media (prefers-color-scheme: dark) {
+  #resumeBanner { background: #78350f; color: #fcd34d; }
+  #resumeBanner a { color: #fcd34d; }
+}
+
 .folder-row {
   display: inline-flex;
   gap: 6px;

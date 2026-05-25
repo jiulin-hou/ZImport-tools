@@ -385,7 +385,6 @@ def test_import_413_when_payload_exceeds_max(app, patch_validate, monkeypatch):
     # cfg is captured in the create_app closure; expose via app extension.
     # Simpler: monkeypatch shutil.disk_usage and set max_task_bytes via
     # the cfg object stashed on app.
-    import zimport_tools.web as _web
     original_max = None
     for cell in cfg or []:
         try:
@@ -530,9 +529,9 @@ def test_upload_chunk_400_when_index_missing_or_huge(app, patch_validate):
     assert r.status_code == 400
 
 
-# ---- v1.3 features: label / dry_run / cancel / new folder / retry only_failed ----
+# ---- v1.3 features: label / cancel / new folder / retry only_failed ----
 
-def test_import_with_label_and_dry_run(app, patch_validate):
+def test_import_with_label_persists(app, patch_validate):
     client = _logged_in(app, patch_validate)
     upload_id = client.post("/api/upload/init",
                             headers=_csrf()).get_json()["upload_id"]
@@ -545,12 +544,10 @@ def test_import_with_label_and_dry_run(app, patch_validate):
         "files": [{"index": 0, "name": "m.eml", "chunks": 1}],
         "folder": "Inbox",
         "label": "Q3 historical",
-        "dry_run": True,
     })
     task_id = resp.get_json()["task_id"]
     t = client.get("/api/tasks/" + task_id).get_json()
     assert t["label"] == "Q3 historical"
-    assert t["dry_run"] == 1
 
 
 def test_cancel_task_queued(app, patch_validate, tmp_path):
@@ -631,7 +628,10 @@ def test_retry_only_failed_filters_keep_files(app, patch_validate, tmp_path):
     from zimport_tools.store import TaskStore
     store = TaskStore(str(tmp_path / "t.db"))
     td = tmp_path / "td"
-    td.mkdir()
+    (td / "input").mkdir(parents=True)
+    (td / "input" / "a.eml").write_bytes(b"a")
+    (td / "input" / "c.eml").write_bytes(b"c")
+    # b.eml is the duplicate-skipped one; we don't need it on disk
     old = store.create_task(account="u@d", requester="u@d",
                             target_folder="Inbox", temp_dir=str(td))
     store.set_status(old, "failed", kind="eml-bundle")
@@ -667,3 +667,46 @@ def test_retry_only_failed_rejected_when_nothing_to_retry(app, patch_validate,
     r = client.post("/api/tasks/" + old + "/retry", headers=_csrf(),
                     json={"only_failed": True})
     assert r.status_code == 400
+
+
+def test_retry_only_failed_filters_missing_input_files(app, patch_validate,
+                                                       tmp_path):
+    """If input/ has been partially cleaned, keep_files must drop the
+    missing entries; if everything's gone, retry returns 400 rather than
+    silently spawning a 0-file task."""
+    from zimport_tools.store import TaskStore
+    store = TaskStore(str(tmp_path / "t.db"))
+    td = tmp_path / "td"
+    (td / "input").mkdir(parents=True)
+    (td / "input" / "still_here.eml").write_bytes(b"x")
+    # gone.eml is referenced by failures but the file is missing.
+    old = store.create_task(account="u@d", requester="u@d",
+                            target_folder="Inbox", temp_dir=str(td))
+    store.set_status(old, "failed", kind="eml-bundle")
+    store.set_failures(old, [
+        {"name": "still_here.eml", "code": "network", "reason": "x"},
+        {"name": "gone.eml",       "code": "network", "reason": "x"},
+    ])
+    client = _logged_in(app, patch_validate)
+    r = client.post("/api/tasks/" + old + "/retry", headers=_csrf(),
+                    json={"only_failed": True})
+    assert r.status_code == 200, r.get_json()
+    new_id = r.get_json()["task_id"]
+    import json as _json
+    keep = _json.loads(store.get_task(new_id)["keep_files"])
+    assert keep == ["still_here.eml"]
+
+
+def test_cancel_running_tgz_rejected(app, patch_validate, tmp_path):
+    """tgz tasks can't be cancelled mid-run (Zimbra processes atomically)."""
+    from zimport_tools.store import TaskStore
+    store = TaskStore(str(tmp_path / "t.db"))
+    td = tmp_path / "td"
+    td.mkdir()
+    tid = store.create_task(account="u@d", requester="u@d",
+                            target_folder="Inbox", temp_dir=str(td))
+    store.set_status(tid, "running", kind="zimbra-export")
+    client = _logged_in(app, patch_validate)
+    r = client.post("/api/tasks/" + tid + "/cancel", headers=_csrf())
+    assert r.status_code == 400
+    assert "tgz" in r.get_json()["error"].lower()
