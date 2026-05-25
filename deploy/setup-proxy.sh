@@ -59,7 +59,11 @@ fi
 
 # --- 3. 在主 server 块末尾插入 include 行(幂等) ----------------------
 log "确保 template 主 server 块包含 include 钩子"
-python3 - <<PYEOF
+# 用 setup.sh 装的 python3.11(CentOS 7 上没有 'python3' 这个命令)
+PYBIN=/usr/local/bin/python3.11
+[ -x "$PYBIN" ] || PYBIN=$(command -v python3 || true)
+[ -x "$PYBIN" ] || { err "找不到 python3.11 或 python3"; exit 1; }
+"$PYBIN" - <<PYEOF
 p = "$TMPL"
 inc_line = "    include /opt/zimbra/conf/nginx/includes/nginx.conf.zimport-tools-main;"
 with open(p) as f:
