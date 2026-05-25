@@ -114,3 +114,14 @@ def test_recover_interrupted_also_recovers_cancelling(tmp_path):
     assert store.get_task(a)["status"] == "interrupted"
     assert store.get_task(b)["status"] == "interrupted"  # the key case
     assert store.get_task(c)["status"] == "done"
+
+
+def test_list_tasks_caps_at_limit(tmp_path):
+    """list_tasks should cap the result set; long-running deployments
+    would otherwise download thousands of rows per page refresh."""
+    from zimport_tools.store import TaskStore
+    store = TaskStore(str(tmp_path / "cap.db"))
+    for _ in range(15):
+        store.create_task("u@d", "u@d", "Inbox", "/tmp/x")
+    assert len(store.list_tasks("u@d", limit=10)) == 10
+    assert len(store.list_tasks("u@d", limit=100)) == 15  # all fit

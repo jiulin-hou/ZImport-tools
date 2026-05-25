@@ -710,3 +710,26 @@ def test_cancel_running_tgz_rejected(app, patch_validate, tmp_path):
     r = client.post("/api/tasks/" + tid + "/cancel", headers=_csrf())
     assert r.status_code == 400
     assert "tgz" in r.get_json()["error"].lower()
+
+
+def test_import_410_when_input_dir_gone(app, patch_validate, monkeypatch):
+    """If a concurrent purge wipes the merged input/ between merge_file
+    and the size sum, /api/import must return 410 not 500."""
+    client = _logged_in(app, patch_validate)
+    upload_id = client.post("/api/upload/init",
+                            headers=_csrf()).get_json()["upload_id"]
+    client.post("/api/upload/chunk", headers=_csrf(), data={
+        "upload_id": upload_id, "file_index": "0", "chunk_index": "0",
+        "blob": (io.BytesIO(b"x"), "blob"),
+    }, content_type="multipart/form-data")
+    monkeypatch.setattr(web.uploads, "merge_file", lambda *a, **kw: None)
+
+    def boom_listdir(path):
+        raise FileNotFoundError(path)
+    monkeypatch.setattr(web.os, "listdir", boom_listdir)
+    resp = client.post("/api/import", headers=_csrf(), json={
+        "upload_id": upload_id,
+        "files": [{"index": 0, "name": "m.eml", "chunks": 1}],
+        "folder": "Inbox",
+    })
+    assert resp.status_code == 410

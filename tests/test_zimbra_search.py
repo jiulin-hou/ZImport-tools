@@ -5,6 +5,8 @@ from zimport_tools import zimbra_search, zimbra_auth
 class _Resp:
     def __init__(self, payload):
         self._payload = payload
+    def __enter__(self): return self
+    def __exit__(self, *a): pass
 
     def json(self):
         return self._payload

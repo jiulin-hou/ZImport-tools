@@ -35,10 +35,10 @@ def search_accounts(cfg, query, limit=20):
         "types": "accounts",
         "limit": int(limit),
         "attrs": "displayName"}}
-    r = requests.post(cfg.admin_soap_url,
-                      json={"Header": header, "Body": body},
-                      verify=cfg.tls_verify(), timeout=30)
-    data = r.json()
+    with requests.post(cfg.admin_soap_url,
+                       json={"Header": header, "Body": body},
+                       verify=cfg.tls_verify(), timeout=30) as r:
+        data = r.json()
     inner = data.get("Body", {})
     if "Fault" in inner:
         raise SearchError(inner["Fault"]["Reason"]["Text"])

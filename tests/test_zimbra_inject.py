@@ -16,6 +16,8 @@ class _Resp:
     def __init__(self, status):
         self.status_code = status
         self.text = "err" if status >= 300 else "ok"
+    def __enter__(self): return self
+    def __exit__(self, *a): pass
 
 
 def test_inject_eml_builds_correct_request(tmp_path, monkeypatch):
@@ -94,6 +96,8 @@ def test_read_message_id_missing(tmp_path):
 class _SoapResp:
     def __init__(self, payload):
         self._payload = payload
+    def __enter__(self): return self
+    def __exit__(self, *a): pass
 
     def json(self):
         return self._payload

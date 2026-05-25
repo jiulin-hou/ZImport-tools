@@ -200,10 +200,13 @@ def create_app(cfg):
                             for p in _NOT_FAILURES)
             ]
             # Guard against the original input/ being partially cleaned or
-            # otherwise missing the files we want to re-run.
+            # otherwise missing the files we want to re-run. TOCTOU-safe:
+            # listdir() can still race with a concurrent cleanup, so wrap.
             input_dir = os.path.join(task["temp_dir"], "input")
-            existing = (set(os.listdir(input_dir))
-                        if os.path.isdir(input_dir) else set())
+            try:
+                existing = set(os.listdir(input_dir))
+            except OSError:
+                existing = set()
             keep_files = [n for n in keep_files if n in existing]
             if not keep_files:
                 return jsonify({"error": "没有真正失败的文件可重试(原任务的文件可能已被清理)"}), 400
@@ -339,8 +342,14 @@ def create_app(cfg):
                                file_index, chunks, name)
 
         input_path = uploads.input_dir(cfg.temp_root, upload_id)
-        used = sum(os.path.getsize(os.path.join(input_path, n))
-                   for n in os.listdir(input_path))
+        # The merged input/ may already be gone if the upload was abandoned
+        # half-way and a concurrent purge swept it. Surface as 410 instead
+        # of bubbling an OSError to a 500.
+        try:
+            used = sum(os.path.getsize(os.path.join(input_path, n))
+                       for n in os.listdir(input_path))
+        except OSError:
+            return jsonify({"error": "上传文件已不可用,请重新上传"}), 410
         free = shutil.disk_usage(cfg.temp_root).free
         if used > cfg.max_task_bytes:
             return jsonify({"error": "本次数据超过单任务大小上限"}), 413

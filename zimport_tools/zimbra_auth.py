@@ -12,8 +12,8 @@ def _soap(url, body, verify, header=None):
     payload = {"Body": body}
     if header:
         payload["Header"] = header
-    r = requests.post(url, json=payload, verify=verify, timeout=30)
-    data = r.json()
+    with requests.post(url, json=payload, verify=verify, timeout=30) as r:
+        data = r.json()
     inner = data.get("Body", {})
     if "Fault" in inner:
         raise AuthError(inner["Fault"]["Reason"]["Text"])

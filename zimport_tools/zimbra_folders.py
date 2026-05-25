@@ -14,10 +14,10 @@ def list_folders(cfg, account_token):
     header = {"context": {"_jsns": "urn:zimbra",
                           "authToken": {"_content": account_token}}}
     body = {"GetFolderRequest": {"_jsns": "urn:zimbraMail"}}
-    r = requests.post(cfg.soap_url,
-                      json={"Header": header, "Body": body},
-                      verify=cfg.tls_verify(), timeout=30)
-    data = r.json()
+    with requests.post(cfg.soap_url,
+                       json={"Header": header, "Body": body},
+                       verify=cfg.tls_verify(), timeout=30) as r:
+        data = r.json()
     inner = data.get("Body", {})
     if "Fault" in inner:
         raise FolderError(inner["Fault"]["Reason"]["Text"])
@@ -53,10 +53,10 @@ def _soap(cfg, account_token, request_name, request_body, ns="urn:zimbraMail"):
     header = {"context": {"_jsns": "urn:zimbra",
                           "authToken": {"_content": account_token}}}
     body = {request_name: dict(request_body, _jsns=ns)}
-    r = requests.post(cfg.soap_url,
-                      json={"Header": header, "Body": body},
-                      verify=cfg.tls_verify(), timeout=30)
-    data = r.json()
+    with requests.post(cfg.soap_url,
+                       json={"Header": header, "Body": body},
+                       verify=cfg.tls_verify(), timeout=30) as r:
+        data = r.json()
     inner = data.get("Body", {})
     if "Fault" in inner:
         raise FolderError(inner["Fault"].get("Reason", {})

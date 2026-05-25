@@ -86,10 +86,10 @@ def _check_one(cfg, token, message_id):
         "_jsns": "urn:zimbraMail",
         "query": query, "limit": 1, "types": "message"}}
     try:
-        r = requests.post(cfg.soap_url,
-                          json={"Header": header, "Body": body},
-                          verify=cfg.tls_verify(), timeout=30)
-        data = r.json()
+        with requests.post(cfg.soap_url,
+                           json={"Header": header, "Body": body},
+                           verify=cfg.tls_verify(), timeout=30) as r:
+            data = r.json()
     except Exception as exc:
         raise DedupeCheckError(str(exc))
     inner = data.get("Body", {})
@@ -148,16 +148,17 @@ def inject_eml(cfg, account, folder, token, eml_path):
     with open(eml_path, "rb") as fh:
         data = fh.read()
     try:
-        r = requests.post(url, params={"fmt": "eml"}, data=data,
-                          cookies={"ZM_AUTH_TOKEN": token},
-                          headers={"Content-Type": "message/rfc822"},
-                          verify=cfg.tls_verify(), timeout=120)
+        with requests.post(url, params={"fmt": "eml"}, data=data,
+                           cookies={"ZM_AUTH_TOKEN": token},
+                           headers={"Content-Type": "message/rfc822"},
+                           verify=cfg.tls_verify(), timeout=120) as r:
+            status = r.status_code
+            text = r.text if status >= 300 else ""
     except requests.RequestException as exc:
         raise InjectError("network", "网络异常,请检查 Zimbra 是否可达") from exc
-    if r.status_code >= 300:
-        code, msg = _classify_http(r.status_code, r.text)
-        raise InjectError(code, msg, http_status=r.status_code,
-                          raw=r.text[:200])
+    if status >= 300:
+        code, msg = _classify_http(status, text)
+        raise InjectError(code, msg, http_status=status, raw=text[:200])
 
 
 def inject_tgz(cfg, account, token, tgz_path):
@@ -167,14 +168,15 @@ def inject_tgz(cfg, account, token, tgz_path):
     # it every imported message would carry today's timestamp.
     try:
         with open(tgz_path, "rb") as fh:
-            r = requests.post(url, params={"fmt": "tgz",
-                                            "resolve": "skip",
-                                            "timestamp": "0"},
-                              data=fh, cookies={"ZM_AUTH_TOKEN": token},
-                              verify=cfg.tls_verify(), timeout=3600)
+            with requests.post(url, params={"fmt": "tgz",
+                                             "resolve": "skip",
+                                             "timestamp": "0"},
+                               data=fh, cookies={"ZM_AUTH_TOKEN": token},
+                               verify=cfg.tls_verify(), timeout=3600) as r:
+                status = r.status_code
+                text = r.text if status >= 300 else ""
     except requests.RequestException as exc:
         raise InjectError("network", "网络异常,请检查 Zimbra 是否可达") from exc
-    if r.status_code >= 300:
-        code, msg = _classify_http(r.status_code, r.text)
-        raise InjectError(code, msg, http_status=r.status_code,
-                          raw=r.text[:200])
+    if status >= 300:
+        code, msg = _classify_http(status, text)
+        raise InjectError(code, msg, http_status=status, raw=text[:200])

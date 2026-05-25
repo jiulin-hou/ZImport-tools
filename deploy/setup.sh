@@ -214,10 +214,17 @@ cat <<EOF
        systemctl daemon-reload
        systemctl enable --now zimport-tools-web zimport-tools-worker
 
-  2. 配 nginx 反向代理(同机 Zimbra 用):
-       bash $APP_DIR/deploy/setup-proxy.sh        # 默认 29443 端口
-       bash $APP_DIR/deploy/setup-proxy.sh --port 9443  # 换端口
+  2. 配 Zimbra 主 nginx 反向代理:
+       bash $APP_DIR/deploy/setup-proxy.sh
+     (在主 443 server 块加 location /zimport-tools/ → 127.0.0.1:8088)
 
-  3. 浏览器打开 https://<host>:<port>/ 用 Zimbra 账号登录测试
+  3. 部署 Zimlet:
+       cd $APP_DIR/zimlet && bash build.sh
+       chown zimbra:zimbra com_msauto_zimport_tools.zip
+       cp com_msauto_zimport_tools.zip /tmp/
+       su - zimbra -c 'zmzimletctl deploy /tmp/com_msauto_zimport_tools.zip'
+
+  4. 用户 Zimbra Web 注销重登 → 左下角 Zimlets 面板「数据导入」
+     或直接访问 https://<zimbra-host>/zimport-tools/
 ================================================================
 EOF

@@ -96,12 +96,16 @@ class TaskStore:
         finally:
             conn.close()
 
-    def list_tasks(self, requester):
+    def list_tasks(self, requester, limit=200):
+        """Latest `limit` tasks for the requester (newest first). Capped to
+        keep responses bounded; users running ZImport-tools for a year would
+        otherwise download thousands of rows on every page refresh."""
         conn = self._conn()
         try:
             rows = conn.execute(
                 "SELECT * FROM tasks WHERE requester=? "
-                "ORDER BY created_at DESC", (requester,)).fetchall()
+                "ORDER BY created_at DESC LIMIT ?",
+                (requester, int(limit))).fetchall()
             return [dict(r) for r in rows]
         finally:
             conn.close()

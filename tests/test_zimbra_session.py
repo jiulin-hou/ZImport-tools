@@ -6,6 +6,8 @@ from zimport_tools.zimbra_auth import Identity
 class _Resp:
     def __init__(self, payload):
         self._payload = payload
+    def __enter__(self): return self
+    def __exit__(self, *a): pass
 
     def json(self):
         return self._payload
