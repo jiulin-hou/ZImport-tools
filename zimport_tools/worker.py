@@ -1,5 +1,5 @@
+import json
 import os
-import re
 import sys
 import time
 import shutil
@@ -11,7 +11,7 @@ from zimport_tools.store import TaskStore
 
 
 # 仅对 transient 错误 retry —— 网络抖、Zimbra 临时 5xx、限流 429/408
-_TRANSIENT_RE = re.compile(r"^network:|HTTP 5\d\d|HTTP 429|HTTP 408")
+_TRANSIENT_CODES = {"network", "transient"}
 
 
 def _inject_eml_with_retry(cfg, account, folder, token, path,
@@ -24,13 +24,21 @@ def _inject_eml_with_retry(cfg, account, folder, token, path,
             zimbra_inject.inject_eml(cfg, account, folder, token, path)
             return
         except zimbra_inject.InjectError as exc:
-            if attempt == max_retries or not _TRANSIENT_RE.search(str(exc)):
+            if attempt == max_retries or exc.code not in _TRANSIENT_CODES:
                 raise
             time.sleep(1.5 ** (attempt + 1))
 
 
 def process_task(cfg, store, task):
     tid = task["id"]
+    is_dry_run = bool(task.get("dry_run"))
+    raw_keep = task.get("keep_files")
+    keep_set = set()
+    if raw_keep:
+        try:
+            keep_set = set(json.loads(raw_keep))
+        except (TypeError, ValueError):
+            keep_set = set()
     try:
         # retry 时 work 可能残留旧产物,清掉再 normalize 一遍
         work = os.path.join(task["temp_dir"], "work")
@@ -42,45 +50,82 @@ def process_task(cfg, store, task):
 
         if norm.kind == "zimbra-export":
             store.set_totals(tid, 1)
-            # tgz 自带 resolve=skip,Zimbra 内部按 Message-ID 去重
-            zimbra_inject.inject_tgz(cfg, task["account"], token,
-                                     norm.repacked_tgz)
-            store.update_progress(tid, done=1, failed=0)
+            if is_dry_run:
+                # tgz dry-run: no per-message preview possible (Zimbra unpacks
+                # inside), just mark done.
+                store.update_progress(tid, done=0, failed=0)
+            else:
+                # tgz 自带 resolve=skip,Zimbra 内部按 Message-ID 去重
+                zimbra_inject.inject_tgz(cfg, task["account"], token,
+                                         norm.repacked_tgz)
+                store.update_progress(tid, done=1, failed=0)
         else:
-            store.set_totals(tid, len(norm.eml_paths))
+            # If keep_set is non-empty, process only those basenames
+            # (used by "retry only failed"); otherwise process all.
+            if keep_set:
+                paths = [p for p in norm.eml_paths
+                         if os.path.basename(p) in keep_set]
+            else:
+                paths = list(norm.eml_paths)
+            store.set_totals(tid, len(paths))
             done = failed = skipped = 0
             failures = []
             seen_local = set()  # 同批内重复(同 Message-ID)
-            for path in norm.eml_paths:
+
+            # Batch-check Zimbra mailbox for existing Message-IDs upfront
+            # so we avoid one SOAP round-trip per eml.
+            mailbox_existing = set()
+            if cfg.dedupe:
+                path_to_mid = {p: zimbra_inject.read_message_id(p)
+                               for p in paths}
+                all_mids = [m for m in path_to_mid.values() if m]
+                mailbox_existing = zimbra_inject.batch_existing_message_ids(
+                    cfg, token, all_mids)
+            else:
+                path_to_mid = {}
+
+            for path in paths:
+                if store.cancel_requested(tid):
+                    store.set_failures(tid, failures)
+                    store.set_status(tid, "cancelled")
+                    return
                 name = os.path.basename(path)
                 try:
                     if cfg.dedupe:
-                        mid = zimbra_inject.read_message_id(path)
+                        mid = path_to_mid.get(path) or ""
                         if mid:
                             if mid in seen_local:
                                 skipped += 1
                                 failures.append({"name": name,
-                                                 "reason": "duplicate (same batch)"})
+                                                 "code": "duplicate_batch",
+                                                 "reason": "重复(本批内同 Message-ID)"})
                                 store.update_progress(tid, done=done,
                                                       failed=failed,
                                                       skipped=skipped)
                                 continue
                             seen_local.add(mid)
-                            if zimbra_inject.message_exists(cfg, token, mid):
+                            if mid in mailbox_existing:
                                 skipped += 1
                                 failures.append({"name": name,
-                                                 "reason": "duplicate (already in mailbox)"})
+                                                 "code": "duplicate_mailbox",
+                                                 "reason": "重复(邮箱内已存在)"})
                                 store.update_progress(tid, done=done,
                                                       failed=failed,
                                                       skipped=skipped)
                                 continue
-                    _inject_eml_with_retry(cfg, task["account"],
-                                           task["target_folder"],
-                                           token, path)
-                    done += 1
+                    if is_dry_run:
+                        # Dry-run: every non-duplicate counts as "would import".
+                        done += 1
+                    else:
+                        _inject_eml_with_retry(cfg, task["account"],
+                                               task["target_folder"],
+                                               token, path)
+                        done += 1
                 except zimbra_inject.InjectError as exc:
                     failed += 1
-                    failures.append({"name": name, "reason": str(exc)})
+                    failures.append({"name": name,
+                                     "code": exc.code,
+                                     "reason": exc.message_zh})
                 store.update_progress(tid, done=done, failed=failed,
                                       skipped=skipped)
             store.set_failures(tid, failures)

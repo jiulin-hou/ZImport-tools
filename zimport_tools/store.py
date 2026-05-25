@@ -19,14 +19,21 @@ CREATE TABLE IF NOT EXISTS tasks (
   skipped INTEGER DEFAULT 0,
   error TEXT,
   failures TEXT,
+  label TEXT,
+  dry_run INTEGER DEFAULT 0,
+  keep_files TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 """
 
-# v1.1 新增 skipped 列 —— 对老 DB 用 ALTER TABLE 兼容
+# Migrations for upgrading older DBs. Each statement runs in its own try/except
+# so already-applied changes are silently skipped.
 _MIGRATIONS = [
-    "ALTER TABLE tasks ADD COLUMN skipped INTEGER DEFAULT 0",
+    "ALTER TABLE tasks ADD COLUMN skipped INTEGER DEFAULT 0",  # v1.1
+    "ALTER TABLE tasks ADD COLUMN label TEXT",                 # v1.3
+    "ALTER TABLE tasks ADD COLUMN dry_run INTEGER DEFAULT 0",  # v1.3
+    "ALTER TABLE tasks ADD COLUMN keep_files TEXT",            # v1.3
 ]
 
 
@@ -58,17 +65,23 @@ class TaskStore:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def create_task(self, account, requester, target_folder, temp_dir):
+    def create_task(self, account, requester, target_folder, temp_dir,
+                    label=None, dry_run=False, keep_files=None):
+        """keep_files: optional list of basenames to skip during processing
+        (used by `retry only_failed` to re-run just the previously failed
+        files). Stored as JSON; worker honors it."""
         tid = uuid.uuid4().hex
         ts = _now()
+        keep_json = json.dumps(keep_files) if keep_files else None
         conn = self._conn()
         try:
             conn.execute(
                 "INSERT INTO tasks (id, account, requester, status, "
-                "target_folder, temp_dir, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?)",
+                "target_folder, temp_dir, label, dry_run, keep_files, "
+                "created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (tid, account, requester, "queued", target_folder,
-                 temp_dir, ts, ts))
+                 temp_dir, label, 1 if dry_run else 0, keep_json, ts, ts))
             conn.commit()
         finally:
             conn.close()
@@ -132,6 +145,41 @@ class TaskStore:
             fields["kind"] = kind
         self._update(task_id, fields)
 
+    def request_cancel(self, task_id):
+        """Mark a queued/running task as cancel-requested. The worker
+        polls task status each iteration and stops at the next check.
+        Returns the new status, or None if the task is not cancellable."""
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT status FROM tasks WHERE id=?",
+                (task_id,)).fetchone()
+            if row is None:
+                return None
+            if row["status"] not in ("queued", "running"):
+                return None
+            # Queued tasks go straight to cancelled (worker hasn't started).
+            # Running tasks transition to cancelling; worker will flip to
+            # cancelled when it reaches the next check.
+            new_status = ("cancelled" if row["status"] == "queued"
+                          else "cancelling")
+            conn.execute("UPDATE tasks SET status=?, updated_at=? "
+                         "WHERE id=?", (new_status, _now(), task_id))
+            conn.commit()
+            return new_status
+        finally:
+            conn.close()
+
+    def cancel_requested(self, task_id):
+        """True if user asked to cancel a running task."""
+        conn = self._conn()
+        try:
+            row = conn.execute("SELECT status FROM tasks WHERE id=?",
+                               (task_id,)).fetchone()
+            return row is not None and row["status"] == "cancelling"
+        finally:
+            conn.close()
+
     def count_active(self):
         conn = self._conn()
         try:
@@ -160,11 +208,11 @@ class TaskStore:
         try:
             rows = conn.execute(
                 "SELECT temp_dir FROM tasks WHERE updated_at < ? "
-                "AND status IN ('done','failed','interrupted')",
+                "AND status IN ('done','failed','interrupted','cancelled')",
                 (cutoff,)).fetchall()
             conn.execute(
                 "DELETE FROM tasks WHERE updated_at < ? "
-                "AND status IN ('done','failed','interrupted')",
+                "AND status IN ('done','failed','interrupted','cancelled')",
                 (cutoff,))
             conn.commit()
             return [r["temp_dir"] for r in rows]

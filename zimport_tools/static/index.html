@@ -21,22 +21,45 @@
       <label>目标账户(管理员):<input id="targetAccount"
         placeholder="留空=导入到自己"></label>
     </div>
-    <label>目标文件夹:<select id="folder"></select></label>
+    <label>目标文件夹:
+      <span class="folder-row">
+        <select id="folder"></select>
+        <button id="newFolderBtn" type="button" class="ghost">+ 新建</button>
+      </span>
+    </label>
     <label>选择文件(多个 .eml 或一个 .tgz):
       <input id="files" type="file" multiple accept=".eml,.tgz,.tar.gz">
     </label>
-    <button id="startBtn">开始导入</button>
-    <div id="uploadProgress"></div>
+    <label>任务备注(可选,便于以后辨认):
+      <input id="label" type="text" maxlength="120"
+             placeholder="例:Q3 历史邮件迁移">
+    </label>
+    <div class="actions">
+      <button id="dryRunBtn" type="button">先预览(不实际导入)</button>
+      <button id="startBtn" type="button" class="primary">开始导入</button>
+    </div>
+
+    <div id="uploadStage" class="upload-progress hidden">
+      <div class="upload-label" id="uploadLabel"></div>
+      <div class="bar"><div class="bar-fill" id="uploadBar"></div></div>
+      <div class="muted" id="uploadEta"></div>
+    </div>
+    <div id="queueStage" class="muted hidden"></div>
 
     <h3>我的任务</h3>
-    <button id="refreshBtn">刷新</button>
+    <div class="task-toolbar">
+      <button id="refreshBtn" type="button" class="ghost">刷新</button>
+    </div>
     <table id="tasks"><thead><tr>
-      <th>任务</th><th>账户</th><th>状态</th><th>进度</th><th>跳过</th><th>失败</th><th></th>
+      <th>任务</th><th>备注</th><th>账户</th><th>状态</th>
+      <th>进度</th><th>跳过</th><th>失败</th><th></th>
     </tr></thead><tbody></tbody></table>
     <div id="taskDetail" class="hidden"></div>
   </div>
 
   <footer id="footer">ZImport-tools <span id="version">…</span></footer>
+
+  <div id="toastHost" class="toast-host"></div>
 
   <script src="static/app.js"></script>
 </body>

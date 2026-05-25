@@ -302,6 +302,30 @@ td .bar { display: inline-block; width: 100px; vertical-align: middle; }
   margin-top: 8px;
 }
 
+.folder-row {
+  display: inline-flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.folder-row select { width: 320px; }
+
+#queueStage {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.status-cancelling { background: #fef3c7; color: #92400e; }
+.status-cancelled  { background: #f3f4f6; color: #6b7280; }
+
+@media (prefers-color-scheme: dark) {
+  .status-cancelling { background: #78350f; color: #fcd34d; }
+  .status-cancelled  { background: #1f2937; color: #9ca3af; }
+}
+
 #footer {
   text-align: center;
   color: var(--muted);

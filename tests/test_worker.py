@@ -50,7 +50,7 @@ def test_process_task_records_per_eml_failure(tmp_path, monkeypatch):
 
     def fake_inject(cfg, acct, folder, tok, p):
         if "bad" in p:
-            raise worker.zimbra_inject.InjectError("boom")
+            raise worker.zimbra_inject.InjectError("invalid", "boom")
 
     monkeypatch.setattr(worker.zimbra_inject, "inject_eml", fake_inject)
     worker.process_task(_Cfg, store, task)
@@ -75,8 +75,8 @@ def test_process_task_dedup_within_batch(tmp_path, monkeypatch):
                         lambda cfg, a: "TOK")
     monkeypatch.setattr(worker.zimbra_inject, "read_message_id",
                         lambda p: "<dup@x>")  # 所有 eml 同 id
-    monkeypatch.setattr(worker.zimbra_inject, "message_exists",
-                        lambda cfg, tok, mid: False)  # 邮箱里没
+    monkeypatch.setattr(worker.zimbra_inject, "batch_existing_message_ids",
+                        lambda cfg, tok, mids: set())  # 邮箱里没
     injected = []
     monkeypatch.setattr(worker.zimbra_inject, "inject_eml",
                         lambda cfg, a, f, t, p: injected.append(p))
@@ -103,8 +103,8 @@ def test_process_task_dedup_against_mailbox(tmp_path, monkeypatch):
                         lambda cfg, a: "TOK")
     monkeypatch.setattr(worker.zimbra_inject, "read_message_id",
                         lambda p: "<x@y>")
-    monkeypatch.setattr(worker.zimbra_inject, "message_exists",
-                        lambda cfg, tok, mid: True)
+    monkeypatch.setattr(worker.zimbra_inject, "batch_existing_message_ids",
+                        lambda cfg, tok, mids: set(mids))  # all exist
     monkeypatch.setattr(worker.zimbra_inject, "inject_eml",
                         lambda *a, **kw: pytest.fail("不应触发 inject"))
 
@@ -121,7 +121,7 @@ def test_inject_retries_on_transient(monkeypatch):
     def fake_inject(cfg, a, f, tok, p):
         attempts[0] += 1
         if attempts[0] < 2:
-            raise worker.zimbra_inject.InjectError("HTTP 502: bad gw")
+            raise worker.zimbra_inject.InjectError("transient", "Zimbra 临时错误 502", http_status=502)
 
     monkeypatch.setattr(worker.zimbra_inject, "inject_eml", fake_inject)
     worker._inject_eml_with_retry(None, "a@d", "Inbox", "T", "/p.eml")
@@ -135,7 +135,7 @@ def test_inject_no_retry_on_permanent(monkeypatch):
 
     def fake_inject(cfg, a, f, tok, p):
         attempts[0] += 1
-        raise worker.zimbra_inject.InjectError("HTTP 403: forbidden")
+        raise worker.zimbra_inject.InjectError("permission", "无权限", http_status=403)
 
     monkeypatch.setattr(worker.zimbra_inject, "inject_eml", fake_inject)
     with pytest.raises(worker.zimbra_inject.InjectError):
@@ -150,7 +150,7 @@ def test_inject_retries_capped(monkeypatch):
 
     def fake_inject(cfg, a, f, tok, p):
         attempts[0] += 1
-        raise worker.zimbra_inject.InjectError("network: down")
+        raise worker.zimbra_inject.InjectError("network", "网络异常")
 
     monkeypatch.setattr(worker.zimbra_inject, "inject_eml", fake_inject)
     with pytest.raises(worker.zimbra_inject.InjectError):
@@ -194,7 +194,7 @@ def test_process_task_marks_failed_on_tgz_inject_error(tmp_path, monkeypatch):
     monkeypatch.setattr(worker.archive, "normalize", lambda *a, **kw: fake)
 
     def boom(cfg, acct, tok, path):
-        raise worker.zimbra_inject.InjectError("HTTP 500: zimbra exploded")
+        raise worker.zimbra_inject.InjectError("transient", "Zimbra 500", http_status=500)
 
     monkeypatch.setattr(worker.zimbra_inject, "inject_tgz", boom)
     worker.process_task(_Cfg, store, task)

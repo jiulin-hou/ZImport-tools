@@ -11,6 +11,7 @@ without a successful CORS preflight, which our endpoints never grant.
 """
 
 import functools
+import json
 import os
 import re
 import shutil
@@ -140,6 +141,19 @@ def create_app(cfg):
             return jsonify({"error": "任务不存在"}), 404
         return jsonify(task)
 
+    @app.route("/api/tasks/<task_id>/cancel", methods=["POST"])
+    @login_required
+    def cancel_task(task_id):
+        task = store.get_task(task_id)
+        if task is None:
+            return jsonify({"error": "任务不存在"}), 404
+        if task["requester"] != g.account and not g.is_admin:
+            return jsonify({"error": "无权取消此任务"}), 403
+        new_status = store.request_cancel(task_id)
+        if new_status is None:
+            return jsonify({"error": "仅排队/运行中的任务可取消"}), 400
+        return jsonify({"status": new_status})
+
     @app.route("/api/tasks/<task_id>/retry", methods=["POST"])
     @login_required
     def retry_task(task_id):
@@ -149,12 +163,31 @@ def create_app(cfg):
         if (task["requester"] != g.account
                 and not g.is_admin):
             return jsonify({"error": "无权重试此任务"}), 403
-        if task["status"] not in ("failed", "interrupted"):
-            return jsonify({"error": "仅失败/中断的任务能重试"}), 400
+        if task["status"] not in ("failed", "interrupted", "cancelled"):
+            return jsonify({"error": "仅失败/中断/取消的任务能重试"}), 400
         if not os.path.isdir(task["temp_dir"]):
             return jsonify({"error": "任务文件已被清理,无法重试"}), 410
         if _queue_limit_for(store, cfg) <= 0:
             return jsonify({"error": "任务队列已满,请稍后再试"}), 429
+
+        body = request.get_json(force=True, silent=True) or {}
+        only_failed = bool(body.get("only_failed"))
+        keep_files = None
+        if only_failed and task.get("kind") != "zimbra-export":
+            failures_raw = task.get("failures") or "[]"
+            try:
+                failures = json.loads(failures_raw)
+            except (TypeError, ValueError):
+                failures = []
+            keep_files = [
+                f["name"] for f in failures
+                if isinstance(f, dict)
+                and f.get("name")
+                and not str(f.get("code", "")).startswith("duplicate")
+            ]
+            if not keep_files:
+                return jsonify({"error": "没有非重复失败的文件可重试"}), 400
+
         # Keep the original requester so the task stays visible in the
         # original author's /api/tasks list; an admin re-running a failed
         # job for someone else should not orphan that user from their own
@@ -163,7 +196,9 @@ def create_app(cfg):
             account=task["account"],
             requester=task["requester"],
             target_folder=task["target_folder"],
-            temp_dir=task["temp_dir"])
+            temp_dir=task["temp_dir"],
+            label=task.get("label"),
+            keep_files=keep_files)
         return jsonify({"task_id": new_id})
 
     # --- folders / admin search ----------------------------------------
@@ -178,6 +213,23 @@ def create_app(cfg):
             tok = zimbra_auth.delegate_token(cfg, account)
             paths = zimbra_folders.list_folders(cfg, tok)
             return jsonify({"folders": paths})
+        except (AuthError, zimbra_folders.FolderError) as exc:
+            return jsonify({"error": str(exc)}), 502
+
+    @app.route("/api/folders", methods=["POST"])
+    @login_required
+    def create_folder():
+        body = request.get_json(force=True, silent=True) or {}
+        path = body.get("path") or ""
+        if not _safe_folder(path):
+            return jsonify({"error": "无效的文件夹路径"}), 400
+        account = body.get("account") or g.account
+        if account != g.account and not g.is_admin:
+            return jsonify({"error": "无权创建此账户的文件夹"}), 403
+        try:
+            tok = zimbra_auth.delegate_token(cfg, account)
+            zimbra_folders.create_folder(cfg, tok, path)
+            return jsonify({"ok": True, "path": path.strip("/")})
         except (AuthError, zimbra_folders.FolderError) as exc:
             return jsonify({"error": str(exc)}), 502
 
@@ -246,6 +298,10 @@ def create_app(cfg):
         folder = body.get("folder") or "Inbox"
         if not _safe_folder(folder):
             return jsonify({"error": "无效的目标文件夹名"}), 400
+        label = body.get("label") or None
+        if label:
+            label = str(label)[:120]  # cap to keep DB reasonable
+        dry_run = bool(body.get("dry_run"))
 
         # 越权防护:管理员可指定目标账户,普通用户强制为本人
         account = g.account
@@ -275,7 +331,8 @@ def create_app(cfg):
         task_id = store.create_task(
             account=account, requester=g.account,
             target_folder=folder,
-            temp_dir=uploads.upload_dir(cfg.temp_root, upload_id))
+            temp_dir=uploads.upload_dir(cfg.temp_root, upload_id),
+            label=label, dry_run=dry_run)
         return jsonify({"task_id": task_id})
 
     # --- CSRF unit-test endpoint ---------------------------------------

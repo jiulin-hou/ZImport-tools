@@ -47,3 +47,26 @@ def _walk(node, paths):
                 path = "/" + child.get("name", "")
             paths.append(path.lstrip("/"))
         _walk(child, paths)
+
+
+def create_folder(cfg, account_token, path):
+    """Create a message folder at `path` (forward-slash separated, no leading
+    slash). Idempotent: if the folder already exists Zimbra returns success.
+    Raises FolderError on Zimbra fault."""
+    header = {"context": {"_jsns": "urn:zimbra",
+                          "authToken": {"_content": account_token}}}
+    body = {"CreateFolderRequest": {
+        "_jsns": "urn:zimbraMail",
+        "folder": {
+            "name": path.strip("/"),
+            "l": "1",        # parent = root (Zimbra resolves '/' in name)
+            "view": "message",
+            "fie": "1",      # fetchIfExists - no fault if it already exists
+        }}}
+    r = requests.post(cfg.soap_url,
+                      json={"Header": header, "Body": body},
+                      verify=cfg.tls_verify(), timeout=30)
+    data = r.json()
+    inner = data.get("Body", {})
+    if "Fault" in inner:
+        raise FolderError(inner["Fault"]["Reason"]["Text"])

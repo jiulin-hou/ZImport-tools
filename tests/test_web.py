@@ -528,3 +528,142 @@ def test_upload_chunk_400_when_index_missing_or_huge(app, patch_validate):
         "blob": (io.BytesIO(b"x"), "blob"),
     }, content_type="multipart/form-data")
     assert r.status_code == 400
+
+
+# ---- v1.3 features: label / dry_run / cancel / new folder / retry only_failed ----
+
+def test_import_with_label_and_dry_run(app, patch_validate):
+    client = _logged_in(app, patch_validate)
+    upload_id = client.post("/api/upload/init",
+                            headers=_csrf()).get_json()["upload_id"]
+    client.post("/api/upload/chunk", headers=_csrf(), data={
+        "upload_id": upload_id, "file_index": "0", "chunk_index": "0",
+        "blob": (io.BytesIO(b"x"), "blob"),
+    }, content_type="multipart/form-data")
+    resp = client.post("/api/import", headers=_csrf(), json={
+        "upload_id": upload_id,
+        "files": [{"index": 0, "name": "m.eml", "chunks": 1}],
+        "folder": "Inbox",
+        "label": "Q3 historical",
+        "dry_run": True,
+    })
+    task_id = resp.get_json()["task_id"]
+    t = client.get("/api/tasks/" + task_id).get_json()
+    assert t["label"] == "Q3 historical"
+    assert t["dry_run"] == 1
+
+
+def test_cancel_task_queued(app, patch_validate, tmp_path):
+    from zimport_tools.store import TaskStore
+    store = TaskStore(str(tmp_path / "t.db"))
+    td = tmp_path / "td"
+    td.mkdir()
+    tid = store.create_task(account="u@d", requester="u@d",
+                            target_folder="Inbox", temp_dir=str(td))
+    client = _logged_in(app, patch_validate)
+    resp = client.post("/api/tasks/" + tid + "/cancel", headers=_csrf())
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "cancelled"
+    assert store.get_task(tid)["status"] == "cancelled"
+
+
+def test_cancel_task_running_marks_cancelling(app, patch_validate, tmp_path):
+    from zimport_tools.store import TaskStore
+    store = TaskStore(str(tmp_path / "t.db"))
+    td = tmp_path / "td"
+    td.mkdir()
+    tid = store.create_task(account="u@d", requester="u@d",
+                            target_folder="Inbox", temp_dir=str(td))
+    store.set_status(tid, "running")
+    client = _logged_in(app, patch_validate)
+    resp = client.post("/api/tasks/" + tid + "/cancel", headers=_csrf())
+    assert resp.get_json()["status"] == "cancelling"
+    assert store.cancel_requested(tid) is True
+
+
+def test_cancel_task_done_rejected(app, patch_validate, tmp_path):
+    from zimport_tools.store import TaskStore
+    store = TaskStore(str(tmp_path / "t.db"))
+    td = tmp_path / "td"
+    td.mkdir()
+    tid = store.create_task(account="u@d", requester="u@d",
+                            target_folder="Inbox", temp_dir=str(td))
+    store.set_status(tid, "done")
+    client = _logged_in(app, patch_validate)
+    assert client.post("/api/tasks/" + tid + "/cancel",
+                       headers=_csrf()).status_code == 400
+
+
+def test_cancel_task_unauthorized(app, patch_validate, tmp_path):
+    from zimport_tools.store import TaskStore
+    store = TaskStore(str(tmp_path / "t.db"))
+    td = tmp_path / "td"
+    td.mkdir()
+    tid = store.create_task(account="other@d", requester="other@d",
+                            target_folder="Inbox", temp_dir=str(td))
+    client = _logged_in(app, patch_validate)  # u@d
+    assert client.post("/api/tasks/" + tid + "/cancel",
+                       headers=_csrf()).status_code == 403
+
+
+def test_create_folder_success(app, patch_validate, monkeypatch):
+    monkeypatch.setattr(web.zimbra_auth, "delegate_token",
+                        lambda cfg, acc: "TOK")
+    monkeypatch.setattr(web.zimbra_folders, "create_folder",
+                        lambda cfg, tok, path: None)
+    client = _logged_in(app, patch_validate)
+    r = client.post("/api/folders", headers=_csrf(),
+                    json={"path": "Inbox/Archive 2024"})
+    assert r.status_code == 200
+    assert r.get_json()["path"] == "Inbox/Archive 2024"
+
+
+def test_create_folder_rejects_unsafe_path(app, patch_validate):
+    client = _logged_in(app, patch_validate)
+    r = client.post("/api/folders", headers=_csrf(),
+                    json={"path": "../etc/passwd"})
+    assert r.status_code == 400
+
+
+def test_retry_only_failed_filters_keep_files(app, patch_validate, tmp_path):
+    """retry only_failed should compute keep_files from prior failures,
+    excluding duplicates."""
+    from zimport_tools.store import TaskStore
+    store = TaskStore(str(tmp_path / "t.db"))
+    td = tmp_path / "td"
+    td.mkdir()
+    old = store.create_task(account="u@d", requester="u@d",
+                            target_folder="Inbox", temp_dir=str(td))
+    store.set_status(old, "failed", kind="eml-bundle")
+    store.set_failures(old, [
+        {"name": "a.eml", "code": "network", "reason": "x"},
+        {"name": "b.eml", "code": "duplicate_mailbox", "reason": "x"},
+        {"name": "c.eml", "code": "invalid", "reason": "x"},
+    ])
+    client = _logged_in(app, patch_validate)
+    r = client.post("/api/tasks/" + old + "/retry", headers=_csrf(),
+                    json={"only_failed": True})
+    assert r.status_code == 200, r.get_json()
+    new_id = r.get_json()["task_id"]
+    new = store.get_task(new_id)
+    import json as _json
+    keep = _json.loads(new["keep_files"])
+    assert sorted(keep) == ["a.eml", "c.eml"]  # b.eml (duplicate) excluded
+
+
+def test_retry_only_failed_rejected_when_nothing_to_retry(app, patch_validate,
+                                                          tmp_path):
+    from zimport_tools.store import TaskStore
+    store = TaskStore(str(tmp_path / "t.db"))
+    td = tmp_path / "td"
+    td.mkdir()
+    old = store.create_task(account="u@d", requester="u@d",
+                            target_folder="Inbox", temp_dir=str(td))
+    store.set_status(old, "failed", kind="eml-bundle")
+    store.set_failures(old, [
+        {"name": "a.eml", "code": "duplicate_batch", "reason": "x"},
+    ])
+    client = _logged_in(app, patch_validate)
+    r = client.post("/api/tasks/" + old + "/retry", headers=_csrf(),
+                    json={"only_failed": True})
+    assert r.status_code == 400
