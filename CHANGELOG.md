@@ -6,6 +6,37 @@
 2. 运行 `bash deploy/release.sh X.Y.Z` —— 自动跑测试、写版本号、提交、
    打 tag、推送 main 与 tag、生成 `dist/zimport-tools-X.Y.Z.tar.gz`
 
+## v1.4.2 — 2026-05-25
+
+第 3 轮审计抓到的几项 —— 一个文档真错 + 两个工程层面的稳健性改进。
+
+- **修 `setup.sh` 末尾的"下一步"指向已删的 29443 模式**:v1.2.0
+  把 `--port` / 29443 模式删了,但 setup.sh 末尾的提示块还在让用户
+  跑 `bash setup-proxy.sh --port 9443` —— 用户跟着做会失败。改成
+  当前真实流程:`setup-proxy.sh`(单参)+ 部署 zimlet + Zimbra Web
+  重登。
+- **`web.py` 文件操作加 OSError 守卫**:
+  - `start_import` 里 `os.listdir(input_path)` + `os.path.getsize`
+    遇到 input_dir 被并发清理时直接抛 OSError → 500。改 try-except
+    返 410 + "上传文件已不可用,请重新上传"
+  - `retry_task` `os.listdir(input_dir)` 同样的 TOCTOU,加 try-except
+    fallback 到空集
+- **`zimbra_*` 全部 `requests.post` 改用 `with` 上下文**:之前直接
+  `r = requests.post(...)` 不 close,长跑 worker 可能慢慢攒连接(连
+  接池泄漏)。改成 `with requests.post(...) as r:` 自动释放。覆盖
+  `zimbra_inject` 3 处、`zimbra_auth._soap`、`zimbra_folders` 2 处、
+  `zimbra_search`。
+- **`store.list_tasks` 加 `LIMIT 200` 默认值**:不分页是迟早问题,
+  现在加防护,前端无需改动(返回行更少而已)。
+
+**回归测试(+2)**
+- `test_list_tasks_caps_at_limit`:守 limit 参数生效
+- `test_import_410_when_input_dir_gone`:守 OSError → 410 而非 500
+
+**测试 fixture 跟进**:`zimbra_*` 测试里的 `_Resp` / `_SoapResp` 假
+对象都加了 `__enter__` / `__exit__` 让 `with requests.post(...)` 能
+mock 出来。
+
 ## v1.4.1 — 2026-05-25
 
 零零碎碎的"知道就好"项也都修了。
