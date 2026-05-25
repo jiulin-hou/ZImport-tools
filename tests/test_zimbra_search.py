@@ -105,14 +105,35 @@ def test_list_accounts_returns_sorted_and_filters_system(monkeypatch):
             {"name": "spam.x@d", "a": []},
             {"name": "ham.y@d", "a": []},
             {"name": "virus-quarantine.x@d", "a": []},
+            # 工具自己的服务账号(_Cfg.svc_name = "svc@d") —— 也要过滤
+            {"name": "svc@d", "a": [{"n": "displayName", "_content": "ZImport"}]},
+            # 大小写不敏感匹配:
+            {"name": "SVC@D", "a": []},
         ]}}})
 
     monkeypatch.setattr(zimbra_search.requests, "post", fake_post)
     monkeypatch.setattr(zimbra_auth.requests, "post", fake_post)
     out = zimbra_search.list_accounts(_Cfg)
-    # 排过序、过滤了系统账户
+    # 排过序、过滤了系统账户和服务账号
     assert [a["name"] for a in out] == ["alice@d", "bob@d"]
     assert out[0]["display"] == "Alice"
+
+
+def test_search_accounts_also_filters_service_account(monkeypatch):
+    def fake_post(url, **kw):
+        body = kw["json"]["Body"]
+        if "AuthRequest" in body:
+            return _Resp({"Body": {"AuthResponse": {
+                "authToken": [{"_content": "T"}]}}})
+        return _Resp({"Body": {"SearchDirectoryResponse": {"account": [
+            {"name": "svc@d", "a": []},
+            {"name": "alice@d", "a": [{"n": "displayName", "_content": "Alice"}]},
+        ]}}})
+
+    monkeypatch.setattr(zimbra_search.requests, "post", fake_post)
+    monkeypatch.setattr(zimbra_auth.requests, "post", fake_post)
+    out = zimbra_search.search_accounts(_Cfg, "any")
+    assert [a["name"] for a in out] == ["alice@d"]  # svc@d 被过滤
 
 
 def test_list_accounts_uses_correct_query(monkeypatch):

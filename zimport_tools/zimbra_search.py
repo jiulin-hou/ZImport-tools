@@ -17,9 +17,27 @@ def _sanitize(q):
     return "".join(c for c in q if _SAFE.match(c))
 
 
+def _is_system_or_service_account(name, svc_name):
+    """True for accounts that should never appear as import targets:
+    Zimbra-internal service accounts (galsync, spam, ham, virus-quarantine)
+    AND the ZImport-tools service account itself (it's a proxy identity,
+    no one ever wants to import mail INTO it)."""
+    name_lower = (name or "").lower()
+    if svc_name and name_lower == svc_name.lower():
+        return True
+    local = name_lower.split("@", 1)[0]
+    return (local.startswith("galsync")
+            or local.startswith("spam.")
+            or local.startswith("ham.")
+            or local.startswith("virus-quarantine"))
+
+
 def list_accounts(cfg, limit=500):
     """以服务账号身份列出所有账户(不带查询过滤),按 name 排序返回
-    [{"name": "user@dom", "display": "User Name"}, ...]。"""
+    [{"name": "user@dom", "display": "User Name"}, ...]。
+
+    隐藏 Zimbra 系统账户和工具自己的服务账号 —— 这些都不可能成为合法的
+    导入目标。"""
     tok = zimbra_auth.admin_token(cfg)
     header = {"context": {"_jsns": "urn:zimbra",
                           "authToken": {"_content": tok}}}
@@ -42,12 +60,7 @@ def list_accounts(cfg, limit=500):
         name = acc.get("name")
         if not name:
             continue
-        # 隐藏 Zimbra 内置系统账户:不会有人想往这些里导邮件
-        local = name.split("@", 1)[0]
-        if (local.startswith("galsync")
-                or local.startswith("spam.")
-                or local.startswith("ham.")
-                or local.startswith("virus-quarantine")):
+        if _is_system_or_service_account(name, cfg.svc_name):
             continue
         display = ""
         for attr in acc.get("a", []) or []:
@@ -89,6 +102,8 @@ def search_accounts(cfg, query, limit=20):
     for acc in accounts:
         name = acc.get("name")
         if not name:
+            continue
+        if _is_system_or_service_account(name, cfg.svc_name):
             continue
         display = ""
         for attr in acc.get("a", []) or []:

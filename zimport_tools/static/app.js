@@ -113,7 +113,11 @@ async function loadAdminAccountOptions() {
     const r = await apiFetch("api/admin/accounts");
     if (!r.ok) return;
     const data = await r.json();
+    const self = (identity && identity.account || "").toLowerCase();
     for (const acc of data.accounts || []) {
+      // 跳过当前登录的管理员自己 —— "(导入到自己)" 已经覆盖这种情况,
+      // 同一个目标在下拉里出现两次只会让人迷惑。
+      if (acc.name && acc.name.toLowerCase() === self) continue;
       const opt = document.createElement("option");
       opt.value = acc.name;
       opt.textContent = acc.display
