@@ -60,9 +60,12 @@ fi
 # --- 测试 ---------------------------------------------------------------
 # 优先用项目 venv,其次用任意系统 python3 + pytest,都没有才警告跳过。
 PYTEST_CMD=""
-if [ -x venv/bin/python ] && venv/bin/python -m pytest --version >/dev/null 2>&1; then
+# Try project venv first (assumed to have all deps).
+if [ -x venv/bin/python ] && venv/bin/python -c "import pytest, flask" >/dev/null 2>&1; then
     PYTEST_CMD="venv/bin/python -m pytest"
-elif command -v python3 >/dev/null 2>&1 && python3 -m pytest --version >/dev/null 2>&1; then
+# Fall back to system python3 only if it can import the project's deps too.
+elif command -v python3 >/dev/null 2>&1 \
+     && python3 -c "import pytest, flask" >/dev/null 2>&1; then
     PYTEST_CMD="python3 -m pytest"
 fi
 if [ -n "$PYTEST_CMD" ]; then
