@@ -1,28 +1,21 @@
 """Flask web layer for ZImport-tools.
 
-Differs from the standalone ZImport's web.py in three ways:
+Stateless: no Flask session, no app secret. Every request re-validates
+the Zimbra ZM_AUTH_TOKEN cookie via zimbra_session (which is LRU-cached
+for 5 minutes to protect Zimbra QPS during chunked uploads). The validated
+Identity is attached to flask.g for the request lifetime.
 
-  1. No /api/login or login form. Identity comes from the Zimbra
-     ZM_AUTH_TOKEN cookie, validated through zimbra_session.
-
-  2. CSRF protection on every state-changing request: requires a custom
-     X-Zimport-CSRF header (which cross-site forms can't set) plus an
-     Origin check that allows empty Origin (test client) and rejects any
-     non-matching Origin.
-
-  3. Account-switch protection: each request compares the cookie's token
-     hash against the session's; if they differ, the session is cleared
-     and rebuilt against the current cookie, so a different Zimbra account
-     cannot inherit the previous one's session privileges.
+CSRF defense: state-changing endpoints require the X-Zimport-CSRF custom
+header — browsers refuse to set X-* headers on cross-origin form posts
+without a successful CORS preflight, which our endpoints never grant.
 """
 
 import functools
 import os
 import re
 import shutil
-from urllib.parse import urlparse
 
-from flask import Flask, jsonify, request, send_from_directory, session
+from flask import Flask, g, jsonify, request, send_from_directory
 
 from zimport_tools import (archive, uploads, zimbra_auth, zimbra_folders,
                            zimbra_search, zimbra_session)
@@ -44,73 +37,36 @@ def _queue_limit_for(store, cfg):
     return cfg.queue_limit - store.count_active()
 
 
-def _origin_from_url(url):
-    if not url:
-        return None
-    p = urlparse(url)
-    if not p.scheme or not p.netloc:
-        return None
-    return "%s://%s" % (p.scheme, p.netloc)
-
-
 def create_app(cfg):
     app = Flask(__name__, static_folder=None)
-    app.secret_key = cfg.secret_key
     app.config["MAX_CONTENT_LENGTH"] = None
-    app.config.update(
-        SESSION_COOKIE_SAMESITE="Lax",
-        SESSION_COOKIE_HTTPONLY=True,
-        SESSION_COOKIE_SECURE=True,
-    )
     store = TaskStore(cfg.db_path)
     os.makedirs(cfg.temp_root, exist_ok=True)
 
-    # Allowed browser origins. Empty list = origin not enforced (the custom
-    # CSRF header alone defends against cross-site form submission since
-    # browsers refuse to set X-* headers without CORS).
-    allowed_origins = set(cfg.web_origins)
-
+    # CSRF defense: require a custom X-* header that cross-origin forms cannot
+    # set (browsers refuse X-* headers without a successful CORS preflight,
+    # which our endpoints never grant).
     def _csrf_check():
         if request.method not in _STATE_CHANGING:
             return None
         if request.headers.get(_CSRF_HEADER) != "1":
             return jsonify({"error": "非法请求来源"}), 403
-        origin = request.headers.get("Origin")
-        if allowed_origins and origin and origin not in allowed_origins:
-            return jsonify({"error": "非法请求来源"}), 403
         return None
-
-    def _auth_via_cookie():
-        """Return ('zimbra_unreachable', None) | (Identity, token) | None."""
-        token = request.cookies.get("ZM_AUTH_TOKEN")
-        if not token:
-            return None
-        try:
-            ident = zimbra_session.validate(cfg, token)
-        except zimbra_session.ZimbraUnreachable:
-            return ("zimbra_unreachable", None)
-        except AuthError:
-            return None
-        return ident, token
 
     def login_required(fn):
         @functools.wraps(fn)
         def wrapper(*a, **kw):
-            cookie_token = request.cookies.get("ZM_AUTH_TOKEN")
-            current_hash = (zimbra_session.token_hash(cookie_token)
-                            if cookie_token else None)
-            if "account" in session and session.get("token_hash") != current_hash:
-                session.clear()
-            if "account" not in session:
-                result = _auth_via_cookie()
-                if result is None:
-                    return jsonify({"error": "未登录"}), 401
-                if result == ("zimbra_unreachable", None):
-                    return jsonify({"error": "Zimbra 暂不可达"}), 503
-                ident, token = result
-                session["account"] = ident.account
-                session["is_admin"] = ident.is_admin
-                session["token_hash"] = zimbra_session.token_hash(token)
+            token = request.cookies.get("ZM_AUTH_TOKEN")
+            if not token:
+                return jsonify({"error": "未登录"}), 401
+            try:
+                ident = zimbra_session.validate(cfg, token)
+            except zimbra_session.ZimbraUnreachable:
+                return jsonify({"error": "Zimbra 暂不可达"}), 503
+            except AuthError:
+                return jsonify({"error": "未登录"}), 401
+            g.account = ident.account
+            g.is_admin = ident.is_admin
             csrf = _csrf_check()
             if csrf is not None:
                 return csrf
@@ -132,21 +88,21 @@ def create_app(cfg):
     @app.route("/api/me")
     @login_required
     def me():
-        return jsonify({"account": session["account"],
-                        "is_admin": session.get("is_admin", False)})
+        return jsonify({"account": g.account,
+                        "is_admin": g.is_admin})
 
     # --- tasks ---------------------------------------------------------
 
     @app.route("/api/tasks")
     @login_required
     def list_tasks():
-        return jsonify(store.list_tasks(session["account"]))
+        return jsonify(store.list_tasks(g.account))
 
     @app.route("/api/tasks/<task_id>")
     @login_required
     def get_task(task_id):
         task = store.get_task(task_id)
-        if task is None or task["requester"] != session["account"]:
+        if task is None or task["requester"] != g.account:
             return jsonify({"error": "任务不存在"}), 404
         return jsonify(task)
 
@@ -156,8 +112,8 @@ def create_app(cfg):
         task = store.get_task(task_id)
         if task is None:
             return jsonify({"error": "任务不存在"}), 404
-        if (task["requester"] != session["account"]
-                and not session.get("is_admin")):
+        if (task["requester"] != g.account
+                and not g.is_admin):
             return jsonify({"error": "无权重试此任务"}), 403
         if task["status"] not in ("failed", "interrupted"):
             return jsonify({"error": "仅失败/中断的任务能重试"}), 400
@@ -167,7 +123,7 @@ def create_app(cfg):
             return jsonify({"error": "任务队列已满,请稍后再试"}), 429
         new_id = store.create_task(
             account=task["account"],
-            requester=session["account"],
+            requester=g.account,
             target_folder=task["target_folder"],
             temp_dir=task["temp_dir"])
         return jsonify({"task_id": new_id})
@@ -177,8 +133,8 @@ def create_app(cfg):
     @app.route("/api/folders")
     @login_required
     def folders():
-        account = request.args.get("account") or session["account"]
-        if account != session["account"] and not session.get("is_admin"):
+        account = request.args.get("account") or g.account
+        if account != g.account and not g.is_admin:
             return jsonify({"error": "无权查询此账户"}), 403
         try:
             tok = zimbra_auth.delegate_token(cfg, account)
@@ -190,7 +146,7 @@ def create_app(cfg):
     @app.route("/api/admin/accounts/search")
     @login_required
     def admin_account_search():
-        if not session.get("is_admin"):
+        if not g.is_admin:
             return jsonify({"error": "仅管理员可用"}), 403
         q = request.args.get("q", "")
         try:
@@ -248,8 +204,8 @@ def create_app(cfg):
         folder = body.get("folder") or "Inbox"
 
         # 越权防护:管理员可指定目标账户,普通用户强制为本人
-        account = session["account"]
-        if session.get("is_admin") and body.get("account"):
+        account = g.account
+        if g.is_admin and body.get("account"):
             account = body["account"]
 
         for f in files:
@@ -266,7 +222,7 @@ def create_app(cfg):
             return jsonify({"error": "服务器临时磁盘空间不足"}), 507
 
         task_id = store.create_task(
-            account=account, requester=session["account"],
+            account=account, requester=g.account,
             target_folder=folder,
             temp_dir=uploads.upload_dir(cfg.temp_root, upload_id))
         return jsonify({"task_id": task_id})

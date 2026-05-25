@@ -6,7 +6,6 @@ from zimport_tools.zimbra_auth import Identity, AuthError
 
 
 class _Cfg:
-    secret_key = "test-secret"
     temp_root = None
     db_path = None
     queue_limit = 50
@@ -14,7 +13,6 @@ class _Cfg:
     chunk_size = 1024
     rest_base = "https://h:8443"
     verify_tls = False
-    web_origins = ["https://h:8443"]
 
 
 @pytest.fixture
@@ -24,8 +22,6 @@ def app(tmp_path):
     cfg.db_path = str(tmp_path / "t.db")
     application = web.create_app(cfg)
     application.config["TESTING"] = True
-    # SECURE cookies require https; relax for test client (http://localhost)
-    application.config["SESSION_COOKIE_SECURE"] = False
     return application
 
 
@@ -89,7 +85,10 @@ def test_login_endpoint_does_not_exist(app):
     assert client.post("/api/login", json={}).status_code == 404
 
 
-def test_account_switch_rebuilds_session(app, patch_validate):
+def test_each_request_resolves_current_cookie(app, patch_validate):
+    """Stateless: identity comes from the cookie sent on this request,
+    not from any server-side session — so swapping the cookie immediately
+    swaps identity."""
     patch_validate({"A": Identity(False, "a@d"),
                     "B": Identity(False, "b@d")})
     client = app.test_client()
@@ -110,36 +109,9 @@ def test_csrf_missing_header_rejected(app, patch_validate):
     assert resp.status_code == 403
 
 
-def test_csrf_bad_origin_rejected(app, patch_validate):
-    patch_validate({"TOK": Identity(False, "u@d")})
-    client = app.test_client()
-    client.set_cookie("ZM_AUTH_TOKEN", "TOK")
-    resp = client.post("/api/_test_csrf",
-                       headers={"X-Zimport-CSRF": "1",
-                                "Origin": "https://evil.example.com"})
-    assert resp.status_code == 403
-
-
 def test_csrf_valid_request_passes(app, patch_validate):
     patch_validate({"TOK": Identity(False, "u@d")})
     client = app.test_client()
-    client.set_cookie("ZM_AUTH_TOKEN", "TOK")
-    resp = client.post("/api/_test_csrf",
-                       headers={"X-Zimport-CSRF": "1",
-                                "Origin": "https://h:8443"})
-    assert resp.status_code == 200
-
-
-def test_csrf_origin_not_enforced_when_whitelist_empty(tmp_path, patch_validate):
-    cfg = _Cfg()
-    cfg.temp_root = str(tmp_path / "tmp")
-    cfg.db_path = str(tmp_path / "t.db")
-    cfg.web_origins = []
-    application = web.create_app(cfg)
-    application.config["TESTING"] = True
-    application.config["SESSION_COOKIE_SECURE"] = False
-    patch_validate({"TOK": Identity(False, "u@d")})
-    client = application.test_client()
     client.set_cookie("ZM_AUTH_TOKEN", "TOK")
     resp = client.post("/api/_test_csrf",
                        headers={"X-Zimport-CSRF": "1",

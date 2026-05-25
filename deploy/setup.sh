@@ -12,8 +12,8 @@
 #      3.11 能编出 _ssl(否则 pip 走不了 HTTPS,Flask 装不上)
 #   5. 并行编译 Python 3.11(make altinstall)
 #   6. 代码复制 + venv + pip install
-#   7. config.ini:secret_key 自动生成;若本机即 Zimbra 主机,自动探测
-#      域名 + 自动创建服务账号(zmprov ca + zmprov ma)
+#   7. config.ini:若本机即 Zimbra 主机,自动探测域名 + 自动创建服务账号
+#      (zmprov ca + zmprov ma)
 #
 # 用法:bash deploy/setup.sh
 set -euo pipefail
@@ -154,7 +154,6 @@ else
     chmod 600 "$ETC_DIR/config.ini"
     chown "$RUN_USER:" "$ETC_DIR/config.ini"
 
-    SECRET_KEY=$(openssl rand -hex 32)
     SVC_NAME_DEFAULT="importsvc@${ZIMBRA_DOMAIN:-example.com}"
     SVC_PASS=$(openssl rand -base64 24 | tr -d '/=+' | cut -c1-24)
 
@@ -162,7 +161,6 @@ else
 import configparser
 cp = configparser.ConfigParser()
 cp.read("$ETC_DIR/config.ini")
-cp["server"]["secret_key"] = "$SECRET_KEY"
 if "$ZIMBRA_HOST":
     cp["zimbra"]["soap_url"] = "https://$ZIMBRA_HOST:8443/service/soap"
     cp["zimbra"]["admin_soap_url"] = "https://$ZIMBRA_HOST:7071/service/admin/soap"
@@ -173,7 +171,7 @@ cp["service_account"]["password"] = "$SVC_PASS"
 with open("$ETC_DIR/config.ini", "w") as f:
     cp.write(f)
 PYEOF
-    log "已写入 secret_key + 服务账号密码($SVC_NAME_DEFAULT)"
+    log "已写入服务账号密码($SVC_NAME_DEFAULT)"
 
     # 若本机即 Zimbra,自动创建服务账号(若不存在)
     if [ "$HAS_ZIMBRA" = "1" ]; then
